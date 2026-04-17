@@ -107,12 +107,51 @@ def get_project_prefix(project_name=None):
 
 # ✅ 외부 rrRender.py 파일 경로
 SCRIPT_PATH = r"M:\RND\SFtools\2023\render\rrRender.py"
+SCRIPT_BACKUP_DIR = r"M:\RND\SFtools\2023\render\_t"
+DEPLOY_ALLOWED_USERS = {"hwang"}
+HWANG_LOCAL_SCRIPT_PATH = r"C:\Users\hwang\Desktop\codex\rrRender\rrRender.py"
 
 # ✅ 현재 모듈 이름 (import할 때 씀)
 MODULE_NAME = "rrRender"
 
 # ✅ 마지막으로 불러온 수정 시간
 last_mtime = None
+
+
+def normalize_path(path):
+    return os.path.normcase(os.path.abspath(path))
+
+
+def can_show_deploy_tools():
+    return os.environ.get("USERNAME", "").strip().lower() in {user.lower() for user in DEPLOY_ALLOWED_USERS}
+
+
+def get_update_source_path():
+    if os.environ.get("USERNAME", "").strip().lower() == "hwang":
+        return HWANG_LOCAL_SCRIPT_PATH
+    return SCRIPT_PATH
+
+
+def get_next_script_backup_path(target_path=SCRIPT_PATH, backup_dir=SCRIPT_BACKUP_DIR):
+    """_t 폴더의 기존 백업 파일명을 훑어서 다음 버전 경로를 반환한다."""
+    base_name = os.path.splitext(os.path.basename(target_path))[0]
+    extension = os.path.splitext(target_path)[1]
+    version_pattern = re.compile(
+        rf"^{re.escape(base_name)}_v(\d+)(?:.*){re.escape(extension)}$",
+        re.IGNORECASE,
+    )
+
+    max_version = 0
+    if os.path.isdir(backup_dir):
+        for file_name in os.listdir(backup_dir):
+            match = version_pattern.match(file_name)
+            if not match:
+                continue
+            max_version = max(max_version, int(match.group(1)))
+
+    next_version = max_version + 1
+    backup_name = f"{base_name}_v{next_version:03d}{extension}"
+    return os.path.join(backup_dir, backup_name), next_version
 
 class DEV_OT_reload_rrrender(bpy.types.Operator):
     """외부 rrRender.py 다시 불러오기"""
@@ -122,7 +161,7 @@ class DEV_OT_reload_rrrender(bpy.types.Operator):
 
     def execute(self, context):
         module_name = "rrRender"
-        server_path = r"M:\RND\SFtools\2023\render\rrRender.py"
+        source_path = get_update_source_path()
 
         if module_name in sys.modules:
             mod = sys.modules[module_name]
@@ -133,8 +172,8 @@ class DEV_OT_reload_rrrender(bpy.types.Operator):
 
         # 서버 → 로컬 복사
         try:
-            shutil.copy2(server_path, local_path)
-            self.report({'INFO'}, f"{server_path} → {local_path} 복사 완료")
+            shutil.copy2(source_path, local_path)
+            self.report({'INFO'}, f"{source_path} → {local_path} 복사 완료")
         except Exception as e:
             self.report({'ERROR'}, f"복사 실패: {e}")
             return {'CANCELLED'}
@@ -143,6 +182,54 @@ class DEV_OT_reload_rrrender(bpy.types.Operator):
         bpy.ops.script.reload()
 
         return {'FINISHED'}
+
+
+class DEV_OT_deploy_rrrender(bpy.types.Operator):
+    """현재 로컬 rrRender.py를 서버 경로로 배포하고 기존 배포본은 _t에 버전 백업"""
+    bl_idname = "dev.deploy_rrrender"
+    bl_label = "Deploy Script"
+    bl_options = {'REGISTER', 'INTERNAL'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        local_path = os.path.abspath(__file__)
+        target_path = SCRIPT_PATH
+        backup_dir = SCRIPT_BACKUP_DIR
+
+        if not can_show_deploy_tools():
+            self.report({'WARNING'}, "허용된 사용자만 배포할 수 있습니다.")
+            return {'CANCELLED'}
+
+        if not os.path.exists(local_path):
+            self.report({'ERROR'}, f"로컬 스크립트를 찾을 수 없음: {local_path}")
+            return {'CANCELLED'}
+
+        if normalize_path(local_path) == normalize_path(target_path):
+            self.report({'WARNING'}, "현재 스크립트가 이미 배포 경로에서 실행 중입니다.")
+            return {'CANCELLED'}
+
+        try:
+            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            os.makedirs(backup_dir, exist_ok=True)
+
+            backup_path = None
+            if os.path.exists(target_path):
+                backup_path, version_number = get_next_script_backup_path(target_path, backup_dir)
+                shutil.copy2(target_path, backup_path)
+                print(f"[DEPLOY] 기존 배포본 백업 완료: v{version_number:03d} -> {backup_path}")
+
+            shutil.copy2(local_path, target_path)
+            message = f"배포 완료: {local_path} -> {target_path}"
+            if backup_path:
+                message += f" | backup: {os.path.basename(backup_path)}"
+            self.report({'INFO'}, message)
+            print(f"[DEPLOY] {message}")
+            return {'FINISHED'}
+        except Exception as exc:
+            self.report({'ERROR'}, f"배포 실패: {exc}")
+            return {'CANCELLED'}
 
 
 # import sf_blendLdv
@@ -8370,6 +8457,11 @@ class SF_PT_SceneBrowser(bpy.types.Panel):
             
            
                       
+        if can_show_deploy_tools():
+            row = box.row()
+            row.scale_y = 1.2
+            row.operator("dev.deploy_rrrender", icon="EXPORT")
+
         row = box.row()
         row.prop(project_settings, "projects", text="Project")       
         row.operator("sf.refresh_scene_and_cut_cache", text="", icon="FILE_REFRESH")
@@ -8921,6 +9013,7 @@ classes = [
     SF_OT_SetOutputPath,
     SF_OT_SaveIncrementalSuffix,
     DEV_OT_reload_rrrender,
+    DEV_OT_deploy_rrrender,
     SF_OT_ImportModePopup,
     SF_OT_LinkLightProperties,
     SF_OT_AllInOne,
