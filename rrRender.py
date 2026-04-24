@@ -867,6 +867,31 @@ def get_scene_compositor_tree(scene=None, create=False, name=None):
     return getattr(scene, "node_tree", None)
 
 
+def set_file_output_node_base_path(node, base_path, label=""):
+    """File Output 노드 경로를 버전 차이를 감안해 안전하게 설정."""
+    if node is None:
+        return False
+
+    if hasattr(node, "base_path"):
+        try:
+            node.base_path = base_path
+            return True
+        except Exception as e:
+            print(f"[CompositorCompat][WARN] {label}base_path 설정 실패: {e}")
+
+    if hasattr(node, "directory"):
+        try:
+            node.directory = base_path
+            return True
+        except Exception as e:
+            print(f"[CompositorCompat][WARN] {label}directory 설정 실패: {e}")
+
+    node_name = getattr(node, "name", "<unnamed>")
+    node_rna = getattr(getattr(node, "bl_rna", None), "identifier", type(node).__name__)
+    print(f"[CompositorCompat][WARN] {label}{node_name} ({node_rna}) 에 output path 속성이 없습니다.")
+    return False
+
+
 def set_scene_compositor_enabled(scene=None, enabled=True, create_tree=False):
     """Blender 4.x/5.x 공용 compositor 활성 처리. 5.x에서는 node group 방식만 안전하게 처리."""
     if scene is None:
@@ -1889,7 +1914,7 @@ def add_render_layer_node(tree, layer_name, location, mute=False):
     # 렌더링 파일 경로 설정
     values = get_base_filepath(current_scene)
     _, new_path, _ = values
-    output_node.base_path = new_path  # 경로 설정
+    set_file_output_node_base_path(output_node, new_path, label=f"FileOutput {layer_name}: ")
     
     # 파일 포맷 및 컬러 설정
     set_output_png(output_node.format, alpha=True, label=f"FileOutput {layer_name}: ")
@@ -1952,7 +1977,7 @@ def add_kuwa_layer_node(tree, layer_name, location):
     if output_node is None:
         output_node = tree.nodes.new(type='CompositorNodeOutputFile')
         output_node.location = (500, location[1])
-        output_node.base_path = new_path  # 경로 설정
+        set_file_output_node_base_path(output_node, new_path, label=f"FileOutput {layer_name}: ")
         set_output_png(output_node.format, alpha=True, label=f"FileOutput {layer_name}: ")
         my_tool = current_scene.my_tool
         scene_number = my_tool.scene_number
@@ -1997,7 +2022,7 @@ def add_layer_node(tree, layer_name, location, node_type='RLayers', post_process
                     setattr(process_node, key, value)
 
         if post_process_type == 'CompositorNodeOutputFile':
-            process_node.base_path = new_path
+            set_file_output_node_base_path(process_node, new_path, label=f"{post_process_type}: ")
             scene_number = current_scene.my_tool.scene_number
             cut_number = current_scene.my_tool.cut_number
             subpath = settings.get('subpath_suffix', '')  # Retrieve the subpath suffix if provided
@@ -4991,7 +5016,11 @@ def update_version(context, increment):
     if tree:
         for node in tree.nodes:
             if node.type == 'OUTPUT_FILE':
-                node.base_path = re.sub(default_version, new_version, new_path)
+                set_file_output_node_base_path(
+                    node,
+                    re.sub(default_version, new_version, new_path),
+                    label="update_version: ",
+                )
 
 
 class SF_OT_VersionOperator(bpy.types.Operator):
@@ -8005,7 +8034,6 @@ class SF_OT_ApplyRenderPresets(bpy.types.Operator):
         preset = presets[preset_name]
         self.apply_preset(context, preset_name, preset)
         self.report({'INFO'}, f"{preset_name} 프리셋 적용 완료")
-        _disable_default_view_layer(context.scene)
         return {'FINISHED'}
 
     def apply_preset(self, context, preset_name, preset):
@@ -8018,38 +8046,6 @@ class SF_OT_ApplyRenderPresets(bpy.types.Operator):
                 set_nested_property(scene, key, value)
             except Exception as e:
                 print(f"[WARN] {key} 적용 실패: {e}")
-
-        # --- 뷰레이어 렌더링 ON/OFF 규칙 ---
-        p = preset_name.lower()
-
-        # 1) 일단 전부 OFF
-        for vl in scene.view_layers:
-            vl.use = False
-
-        # 2) 프리셋별로 필요한 것만 ON
-        if p.endswith("_bg"):
-            # BG 전용: 배경 계열만 ON
-            for vl in scene.view_layers:
-                if vl.name.startswith("bg_") or vl.name == "bg_vl":
-                    vl.use = True
-            # 라이트마스크는 _bg에서만 OFF (명시적으로 보증)
-            for vl in scene.view_layers:
-                if vl.name.startswith("lightmask_") or vl.name == "lightmask_vl":
-                    vl.use = False
-
-        elif p.endswith("_ch"):
-            # CH 전용: 캐릭터 계열만 ON
-            for vl in scene.view_layers:
-                if vl.name.startswith("ch_") or vl.name == "ch_vl":
-                    vl.use = True
-                if vl.name.startswith("lightmask_") or vl.name == "lightmask_vl":
-                    vl.use = True                    
-            # 라이트마스크는 여기서 건드리지 않음 (필요 시 별도 프리셋/버튼에서 관리)
-
-        # 3) 기본 ViewLayer는 항상 OFF
-        if "ViewLayer" in scene.view_layers:
-            scene.view_layers["ViewLayer"].use = False
-            print("[SF] 기본 ViewLayer 강제 OFF (ApplyPreset)")
 
 
 
