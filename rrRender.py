@@ -72,6 +72,124 @@ PROJECT_NAME_ALIASES = {
     'FUZZ': 'FUZZ',
 }
 
+_recent_browser_state_ready = False
+_recent_browser_state_suspended = False
+RECENT_BROWSER_STATE_DIR = r"C:\_json"
+RECENT_BROWSER_STATE_FILE = "rrRender_recent_browser_state.json"
+
+
+def get_recent_browser_state_path():
+    return os.path.join(RECENT_BROWSER_STATE_DIR, RECENT_BROWSER_STATE_FILE)
+
+
+def get_legacy_recent_browser_state_paths():
+    paths = []
+    try:
+        base_dir = bpy.utils.user_resource('CONFIG')
+        paths.append(os.path.join(base_dir, RECENT_BROWSER_STATE_FILE))
+    except Exception:
+        pass
+
+    paths.append(os.path.join(os.path.expanduser("~"), RECENT_BROWSER_STATE_FILE))
+    return [path for path in paths if os.path.abspath(path) != os.path.abspath(get_recent_browser_state_path())]
+
+
+def save_recent_browser_state(context=None, force=False):
+    global _recent_browser_state_ready, _recent_browser_state_suspended
+    if not force and (not _recent_browser_state_ready or _recent_browser_state_suspended):
+        return
+
+    context = bpy.context if context is None else context
+    try:
+        scene = context.scene
+        my_tool = getattr(scene, "my_tool", None)
+        project_settings = getattr(scene, "my_project_settings", None)
+        if not my_tool or not project_settings:
+            return
+
+        data = {
+            "project": str(getattr(project_settings, "projects", "") or ""),
+            "scene_number": str(getattr(my_tool, "scene_number", "") or ""),
+            "cut_number": str(getattr(my_tool, "cut_number", "") or ""),
+            "blend_file": str(getattr(my_tool, "blend_file", "") or ""),
+        }
+
+        path = get_recent_browser_state_path()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[RecentState][WARN] save failed: {e}")
+
+
+def load_recent_browser_state():
+    path = get_recent_browser_state_path()
+    if not os.path.exists(path):
+        for legacy_path in get_legacy_recent_browser_state_paths():
+            if os.path.exists(legacy_path):
+                path = legacy_path
+                break
+        else:
+            return {}
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"[RecentState][WARN] load failed: {e}")
+        return {}
+
+
+def restore_recent_browser_state():
+    global _recent_browser_state_ready, _recent_browser_state_suspended
+    try:
+        _recent_browser_state_suspended = True
+        scene = bpy.context.scene
+        my_tool = getattr(scene, "my_tool", None)
+        project_settings = getattr(scene, "my_project_settings", None)
+        if not my_tool or not project_settings:
+            _recent_browser_state_ready = True
+            return None
+
+        data = load_recent_browser_state()
+        if not data:
+            _recent_browser_state_ready = True
+            return None
+
+        project = PROJECT_NAME_ALIASES.get(str(data.get("project", "")).strip().upper(), str(data.get("project", "")).strip().upper())
+        if project:
+            valid_projects = {item.identifier for item in MyProjectSettings1.bl_rna.properties["projects"].enum_items}
+            if project in valid_projects:
+                project_settings.projects = project
+
+        scene_number = str(data.get("scene_number", "") or "")
+        if scene_number:
+            valid_scenes = {item[0] for item in get_cached_scenes()}
+            if scene_number in valid_scenes:
+                my_tool.scene_number = scene_number
+
+        cut_number = str(data.get("cut_number", "") or "")
+        if cut_number and scene_number:
+            valid_cuts = {item[0] for item in get_cached_cuts(scene_number)}
+            if cut_number in valid_cuts:
+                my_tool.cut_number = cut_number
+
+        blend_file = str(data.get("blend_file", "") or "")
+        if blend_file and scene_number and cut_number:
+            valid_blend_files = {item[0] for item in get_blend_files(my_tool, bpy.context)}
+            if blend_file in valid_blend_files:
+                my_tool.blend_file = blend_file
+
+        save_recent_browser_state(force=True)
+    except Exception as e:
+        print(f"[RecentState][WARN] restore failed: {e}")
+    finally:
+        _recent_browser_state_suspended = False
+        _recent_browser_state_ready = True
+
+    return None
+
 
 def get_current_project_name(default='BTS'):
     """현재 UI의 프로젝트 이름을 정규화하여 반환"""
@@ -408,6 +526,27 @@ class OpenCutFolderOperator(bpy.types.Operator):
         open_folder(path)
         return {'FINISHED'}
     
+def set_blend_file_to_first_available(context):
+    if _recent_browser_state_suspended:
+        return
+
+    my_tool = getattr(context.scene, "my_tool", None)
+    if not my_tool or not hasattr(my_tool, "blend_file"):
+        return
+
+    try:
+        items = get_blend_files(my_tool, context)
+        if items:
+            my_tool.blend_file = items[0][0]
+    except Exception as e:
+        print(f"[RecentState][WARN] blend_file fallback failed: {e}")
+
+
+def update_project_selection(self, context):
+    set_blend_file_to_first_available(context)
+    save_recent_browser_state(context)
+
+
 class MyProjectSettings1(bpy.types.PropertyGroup):
     projects: bpy.props.EnumProperty(
         name="Projects",
@@ -418,7 +557,8 @@ class MyProjectSettings1(bpy.types.PropertyGroup):
             ('DSC', "DSC", "Located in S:\\ drive"),
             ('BTS', "BTS", "Located in B:\\ drive"),            
             ('FUZZ', "FUZZ", "Located in Z:\\ drive")
-        ]
+        ],
+        update=update_project_selection
     )
     
 # 씬 목록을 캐시에서 가져오거나, 없으면 로드
@@ -595,14 +735,17 @@ class SF_OT_RefreshSceneAndCutCache(bpy.types.Operator):
         return {'FINISHED'}
 
 def update_scene_number(self, context):
-    if hasattr(context.scene, "my_tool") and hasattr(context.scene.my_tool, "blend_file"):
-        context.scene.my_tool.blend_file = ''
+    set_blend_file_to_first_available(context)
     context.scene.sf_scene_number = self.scene_number
+    save_recent_browser_state(context)
 
 def update_cut_number(self, context):
-    if hasattr(context.scene, "my_tool") and hasattr(context.scene.my_tool, "blend_file"):
-        context.scene.my_tool.blend_file = ''
+    set_blend_file_to_first_available(context)
     context.scene.sf_cut_number = self.cut_number
+    save_recent_browser_state(context)
+
+def update_blend_file(self, context):
+    save_recent_browser_state(context)
 
 class MyProperties(bpy.types.PropertyGroup):
     scene_number: bpy.props.EnumProperty(
@@ -623,7 +766,8 @@ class MyProperties(bpy.types.PropertyGroup):
     blend_file: bpy.props.EnumProperty(
         name="File",
         description="Choose a Blender File",
-        items=get_blend_files
+        items=get_blend_files,
+        update=update_blend_file
     )
 
     confirm_overwrite: bpy.props.BoolProperty(
@@ -941,7 +1085,7 @@ def set_nested_property(target_obj, key_path, value):
     except Exception as e:
         print(f"  [FAIL] 설정 실패: {key_path} = {value} ({e})")
 
-def load_project_render_settings(context):
+def load_project_render_settings(context, apply_render_settings=True, apply_view_layer_settings=True):
     scene = context.scene
     
     # 1. JSON 파일 경로 찾기 (기존 함수 get_project_paths 사용)
@@ -967,6 +1111,12 @@ def load_project_render_settings(context):
         print(f"[ERROR] JSON 파싱 에러: {e}")
         return False
 
+    if not apply_render_settings:
+        data = dict(data)
+        data.pop("view_settings", None)
+        data.pop("eevee_settings", None)
+        data.pop("render_settings", None)
+
     # -------------------------------------------------------
     # [핵심] 반복문으로 자동 매핑
     # -------------------------------------------------------
@@ -991,7 +1141,7 @@ def load_project_render_settings(context):
     # -------------------------------------------------------
 
     # 1. View Layers (없으면 자동 생성)
-    if "view_layer_settings" in data:
+    if apply_view_layer_settings and "view_layer_settings" in data:
         for vl_name, is_enabled in data["view_layer_settings"].items():
             vl = scene.view_layers.get(vl_name)
             if not vl:
@@ -1156,96 +1306,159 @@ def load_settings():
         return {}
 
 def _disable_default_view_layer(scene):
-    """기본 ViewLayer를 철저하게 렌더에서 제외"""
+    """?? ViewLayer? ???? ???? ??"""
     vl = scene.view_layers.get("ViewLayer")
     if vl:
         vl.use = False
-        print("[SF] 기본 ViewLayer 렌더 OFF 완료")
+        print("[SF] ?? ViewLayer ?? OFF ??")
     else:
-        print("[SF][WARN] 기본 ViewLayer를 찾을 수 없습니다.")
+        print("[SF][WARN] ?? ViewLayer? ?? ? ????.")
+
+
+def setup_render_view_layers(context, scene):
+    if "ch_vl" not in scene.view_layers:
+        scene.view_layers.new(name="ch_vl")
+    set_and_restore_view_layer_properties(context, scene, "ch_vl", "ch_col", {"exclude": False, "holdout": False, "indirect_only": False})
+    set_and_restore_view_layer_properties(context, scene, "ch_vl", "ch_blocker_col", {"exclude": False, "holdout": True, "indirect_only": False})
+    set_and_restore_view_layer_properties(context, scene, "ch_vl", "bg_col", {"exclude": True, "holdout": True, "indirect_only": True})
+    set_and_restore_view_layer_properties(context, scene, "ch_vl", "prop_col", {"exclude": True, "holdout": True, "indirect_only": True})
+
+    if "bg_vl" not in scene.view_layers:
+        scene.view_layers.new(name="bg_vl")
+    set_and_restore_view_layer_properties(context, scene, "bg_vl", "ch_col", {"exclude": True, "holdout": False, "indirect_only": True})
+    set_and_restore_view_layer_properties(context, scene, "bg_vl", "ch_blocker_col", {"exclude": True, "holdout": False, "indirect_only": False})
+    set_and_restore_view_layer_properties(context, scene, "bg_vl", "bg_col", {"exclude": False, "holdout": False, "indirect_only": False})
+    set_and_restore_view_layer_properties(context, scene, "bg_vl", "prop_col", {"exclude": False, "holdout": False, "indirect_only": False})
+
+    if "lightmask_vl" not in scene.view_layers:
+        scene.view_layers.new(name="lightmask_vl")
+    set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "lightmask_col", {"exclude": False, "holdout": False, "indirect_only": False})
+    set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "ch_col", {"exclude": True, "holdout": True, "indirect_only": True})
+    set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "ch_blocker_col", {"exclude": True, "holdout": True, "indirect_only": True})
+    set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "bg_col", {"exclude": True, "holdout": True, "indirect_only": True})
+    set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "prop_col", {"exclude": True, "holdout": True, "indirect_only": True})
+
+    if "ViewLayer" in scene.view_layers:
+        bpy.context.window.view_layer = bpy.context.scene.view_layers["ViewLayer"]
+
+
+def apply_view_layer_render_pass_settings(scene):
+    if "ViewLayer" in scene.view_layers:
+        scene.view_layers["ViewLayer"].use_pass_cryptomatte_material = True
+        scene.view_layers["ViewLayer"].use_pass_cryptomatte_object = True
+        scene.view_layers["ViewLayer"].use_pass_z = True
+
+    if "ch_vl" in scene.view_layers:
+        scene.view_layers["ch_vl"].use_pass_cryptomatte_material = True
+        scene.view_layers["ch_vl"].use_pass_cryptomatte_asset = True
+        scene.view_layers["ch_vl"].use_pass_cryptomatte_object = True
+        scene.view_layers["ch_vl"].use_pass_z = True
+
+    if "bg_vl" in scene.view_layers:
+        scene.view_layers["bg_vl"].use_pass_cryptomatte_material = True
+        scene.view_layers["bg_vl"].use_pass_cryptomatte_object = True
+        scene.view_layers["bg_vl"].use_pass_z = True
+
+    if "lightmask_vl" in scene.view_layers:
+        scene.view_layers["lightmask_vl"].use_pass_cryptomatte_material = False
+        scene.view_layers["lightmask_vl"].use_pass_z = True
+
+    _disable_default_view_layer(scene)
+
+
+def _sync_build_scene_all_flags(operator, context):
+    value = bool(getattr(operator, "toggle_all_build", False))
+    operator.apply_scene_settings = value
+    operator.apply_render_settings = value
+    operator.apply_view_layer_settings = value
+    operator.apply_render_pass_settings = value
 
 
 class SF_OT_ViewLayerSetupOperator(bpy.types.Operator):
-    """뷰 레이어 생성 및 세팅"""
+    """? ??? ?? ? ??"""
     bl_idname = "sf.view_layer_setup"
     bl_label = "View Layer Setup"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         scene = context.scene
-
-        # --- ViewLayer 기본 설정 ---
-        if "ViewLayer" in scene.view_layers:
-            scene.view_layers["ViewLayer"].use_pass_cryptomatte_material = True
-            scene.view_layers["ViewLayer"].use_pass_cryptomatte_object = True
-            scene.view_layers["ViewLayer"].use_pass_z = True
-
-        # --- ch_vl ---
-        if "ch_vl" not in scene.view_layers:
-            scene.view_layers.new(name="ch_vl")
-        set_and_restore_view_layer_properties(context, scene, "ch_vl", "ch_col", {"exclude": False, "holdout": False, "indirect_only": False})
-        set_and_restore_view_layer_properties(context, scene, "ch_vl", "ch_blocker_col", {"exclude": False, "holdout": True, "indirect_only": False})
-        set_and_restore_view_layer_properties(context, scene, "ch_vl", "bg_col", {"exclude": True, "holdout": True, "indirect_only": True})
-        set_and_restore_view_layer_properties(context, scene, "ch_vl", "prop_col", {"exclude": True, "holdout": True, "indirect_only": True})
-        scene.view_layers["ch_vl"].use_pass_cryptomatte_material = True
-        scene.view_layers["ch_vl"].use_pass_cryptomatte_asset = True
-        scene.view_layers["ch_vl"].use_pass_cryptomatte_object = True
-        scene.view_layers["ch_vl"].use_pass_z = True
-
-        # --- bg_vl ---
-        if "bg_vl" not in scene.view_layers:
-            scene.view_layers.new(name="bg_vl")
-        set_and_restore_view_layer_properties(context, scene, "bg_vl", "ch_col", {"exclude": True, "holdout": False, "indirect_only": True})
-        set_and_restore_view_layer_properties(context, scene, "bg_vl", "ch_blocker_col", {"exclude": True, "holdout": False, "indirect_only": False})
-        set_and_restore_view_layer_properties(context, scene, "bg_vl", "bg_col", {"exclude": False, "holdout": False, "indirect_only": False})
-        set_and_restore_view_layer_properties(context, scene, "bg_vl", "prop_col", {"exclude": False, "holdout": False, "indirect_only": False})
-        scene.view_layers["bg_vl"].use_pass_cryptomatte_material = True
-        scene.view_layers["bg_vl"].use_pass_cryptomatte_object = True
-        scene.view_layers["bg_vl"].use_pass_z = True
-
-        # --- lightmask_vl ---
-        if "lightmask_vl" not in scene.view_layers:
-            scene.view_layers.new(name="lightmask_vl")
-        set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "lightmask_col", {"exclude": False, "holdout": False, "indirect_only": False})
-        set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "ch_col", {"exclude": True, "holdout": True, "indirect_only": True})
-        set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "ch_blocker_col", {"exclude": True, "holdout": True, "indirect_only": True})
-        set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "bg_col", {"exclude": True, "holdout": True, "indirect_only": True})
-        set_and_restore_view_layer_properties(context, scene, "lightmask_vl", "prop_col", {"exclude": True, "holdout": True, "indirect_only": True})
-        scene.view_layers["lightmask_vl"].use_pass_cryptomatte_material = False
-        scene.view_layers["lightmask_vl"].use_pass_z = True
-
-        # 기본 ViewLayer로 되돌리기
-        bpy.context.window.view_layer = bpy.context.scene.view_layers["ViewLayer"]
+        setup_render_view_layers(context, scene)
+        apply_view_layer_render_pass_settings(scene)
         self.report({'INFO'}, "View layers created and configured.")
-        # 기본 ViewLayer 비활성화 🔥 (중요 포인트)
-        _disable_default_view_layer(scene)
-        
         return {'FINISHED'}
-
 
 
 class SF_OT_BuildSceneOperator(bpy.types.Operator):
     bl_idname = "sf.build_scene_operator"
     bl_label = "Build Scene"
 
+    toggle_all_build: bpy.props.BoolProperty(name="ALL", default=False, update=_sync_build_scene_all_flags)
+    apply_scene_settings: bpy.props.BoolProperty(name="Scene Settings", default=True)
+    apply_render_settings: bpy.props.BoolProperty(name="Render Settings", default=True)
+    apply_view_layer_settings: bpy.props.BoolProperty(name="ViewLayer Settings", default=False)
+    apply_render_pass_settings: bpy.props.BoolProperty(name="Render Pass Settings", default=True)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        flow = layout.grid_flow(row_major=True, columns=2, even_columns=True, even_rows=True, align=True)
+        flow.prop(self, "toggle_all_build")
+        flow.prop(self, "apply_scene_settings")
+        flow.prop(self, "apply_render_settings")
+        flow.prop(self, "apply_view_layer_settings")
+        flow.prop(self, "apply_render_pass_settings")
+
     def execute(self, context):
+        if not any([
+            self.apply_scene_settings,
+            self.apply_render_settings,
+            self.apply_view_layer_settings,
+            self.apply_render_pass_settings,
+        ]):
+            self.report({'WARNING'}, "No Build Scene options selected.")
+            return {'CANCELLED'}
+
+        if self.apply_scene_settings:
+            self.setup_scene_structure(context)
+
+        settings = None
+        if self.apply_render_settings:
+            settings = self.load_settings()
+            if settings:
+                self.apply_settings(settings, apply_render_settings=True, apply_view_layer_settings=False)
+            else:
+                return {'CANCELLED'}
+            set_output_exr_multilayer(context.scene.render.image_settings, label="Scene Build: ")
+            load_project_render_settings(context, apply_render_settings=True, apply_view_layer_settings=False)
+            context.scene.render.resolution_percentage = 100
+
+        if self.apply_view_layer_settings:
+            setup_render_view_layers(context, context.scene)
+            load_project_render_settings(context, apply_render_settings=False, apply_view_layer_settings=True)
+
+        if self.apply_render_pass_settings:
+            apply_view_layer_render_pass_settings(context.scene)
+
+        self.report({'INFO'}, "Scene Build Complete")
+        return {'FINISHED'}
+
+    def setup_scene_structure(self, context):
         my_tool = context.scene.my_tool
         scene = context.scene
         scene_number = my_tool.scene_number
         cut_number = my_tool.cut_number
         project_prefix = get_project_prefix()
         scene.name = f"{project_prefix}_{scene_number}_{cut_number}"
-        
-        # "Collection" 컬렉션과 그 하위 컬렉션 삭제
+
         if "Collection" in bpy.data.collections:
-            for col in bpy.data.collections["Collection"].children:
+            for col in list(bpy.data.collections["Collection"].children):
                 bpy.data.collections.remove(col)
             bpy.data.collections.remove(bpy.data.collections["Collection"])
 
-        # 카메라 불러오기
         bpy.ops.sf.import_scene_camera()
 
-        # 카테고리 컬렉션 생성
         categories = ["ch", "ch_blocker", "prop", "bg", "lightmask"]
         for category in categories:
             category_name = f"{category}_col"
@@ -1253,19 +1466,23 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
                 new_col = bpy.data.collections.new(category_name)
                 scene.collection.children.link(new_col)
 
-        # 뷰포트 셰이딩 옵션
-        if context.space_data.type == 'VIEW_3D':
+        if context.space_data and context.space_data.type == 'VIEW_3D':
             context.space_data.shading.show_backface_culling = True
         else:
             print("This operation is only valid in the 3D View.")
-            
+
         set_scene_compositor_enabled(context.scene, True, create_tree=False)
-        
-        # 🔥 아웃라이너 필터 켜기 (블렌더 4.x 호환 및 에러 방어)
+        self.enable_outliner_restrict_columns()
+
+        get_base_filepath(scene)
+        bpy.ops.sf.generate_operator()
+        bpy.ops.sf.version_operator(increment=-999)
+        self.apply_scene_resolution(scene, project_prefix, scene_number, cut_number)
+
+    def enable_outliner_restrict_columns(self):
         try:
             outliner_area = next(a for a in bpy.context.screen.areas if a.type == "OUTLINER")
             space = outliner_area.spaces
-            
             outliner_attrs = [
                 "show_restrict_column_enable",
                 "show_restrict_column_select",
@@ -1273,7 +1490,7 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
                 "show_restrict_column_viewport",
                 "show_restrict_column_render",
                 "show_restrict_column_holdout",
-                "show_restrict_column_indirect_only"
+                "show_restrict_column_indirect_only",
             ]
             for attr in outliner_attrs:
                 if hasattr(space, attr):
@@ -1281,19 +1498,7 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
         except StopIteration:
             pass
 
-        # 렌더링 파일 경로 설정
-        values = get_base_filepath(scene)
-        original_path, new_path = values[:2]    
-        bpy.ops.sf.generate_operator()
-        bpy.ops.sf.version_operator(increment=-999)
-        
-        settings = self.load_settings()
-        if settings:
-            self.apply_settings(settings)
-        else:
-            return {'CANCELLED'}
-
-        # 🔥 레졸루션 처리 로직 (1/2 사이즈 인식 및 뻥튀기)
+    def apply_scene_resolution(self, scene, project_prefix, scene_number, cut_number):
         base_path = get_project_paths()
         json_file_name = f"{project_prefix}_{scene_number}_{cut_number}_camera_data.json"
         full_json_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache", json_file_name)
@@ -1307,11 +1512,10 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
         json_h = camera_data.get('resolutionY')
 
         if json_w and json_h:
-            # 마야에서 1/2 사이즈로 넘어왔을 경우
             if json_w < 2500:
                 final_w = int(json_w * 2)
                 final_h = int(json_h * 2)
-                print(f"[INFO] 1/2 사이즈 카메라 감지됨. 해상도 2배 업스케일: {final_w}x{final_h}")
+                print(f"[INFO] 1/2 ??? ??? ???. ??? 2? ????: {final_w}x{final_h}")
             else:
                 final_w = int(json_w)
                 final_h = int(json_h)
@@ -1322,9 +1526,8 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
                 final_w, final_h = 3840, 1634
             else:
                 final_w, final_h = 1920, 1080
-            print(f"[WARN] JSON 해상도 데이터 없음. 프로젝트 기본 해상도 강제 적용: {final_w}x{final_h}")
+            print(f"[WARN] JSON ??? ??? ??. ???? ?? ??? ?? ??: {final_w}x{final_h}")
 
-        # 렌더링 코덱 오류(H.264 등) 방지를 위한 홀수 픽셀 짝수화 보정
         if final_h % 2 != 0:
             final_h += 1
         if final_w % 2 != 0:
@@ -1332,25 +1535,6 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
 
         scene.render.resolution_x = final_w
         scene.render.resolution_y = final_h
-
-        # ✅ 기본 ViewLayer 렌더링 끄기
-        if "ViewLayer" in scene.view_layers:
-            default_vl = scene.view_layers["ViewLayer"]
-            default_vl.use = False
-            print("[INFO] 기본 ViewLayer 렌더링 비활성화")
-
-        sc = scene
-        set_output_exr_multilayer(sc.render.image_settings, label="Scene Build: ")
-
-        # JSON 렌더 세팅 불러오기 (여기서 예전에는 200%로 덮어썼음)
-        load_project_render_settings(context)       
-        
-        # 🔥 [최종 쐐기] load_project_render_settings 이후에도 무조건 100% 강제 고정!
-        scene.render.resolution_percentage = 100
-
-        self.report({'INFO'}, "Scene Build Complete (Settings & Resolution Loaded)")
-
-        return {'FINISHED'}
 
     def get_project_settings_path(self):
         base_path = get_project_paths()
@@ -1363,10 +1547,10 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
             with open(settings_path, 'r') as file:
                 return json.load(file)
         except FileNotFoundError:
-            self.report({'ERROR'}, "설정 파일을 찾을 수 없습니다.")
+            self.report({'ERROR'}, "?? ??? ?? ? ????.")
             return {}
         except json.JSONDecodeError:
-            self.report({'ERROR'}, "설정 파일 형식이 잘못되었습니다.")
+            self.report({'ERROR'}, "?? ?? ??? ???????.")
             return {}
 
     def clear_all_nodes(self, node_tree):
@@ -1378,132 +1562,103 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
         render_layer_node.layer = layer_name
         render_layer_node.location = location
 
-    def apply_settings(self, settings):
+    def apply_settings(self, settings, apply_render_settings=True, apply_view_layer_settings=True):
         scene = bpy.context.scene
         eevee = scene.eevee
         cycles = scene.cycles
         render = scene.render
-        tree = get_scene_compositor_tree(scene, create=False)
-        viewLayer = scene.view_layers
 
-        # 렌더 설정 적용
-        render_settings = settings.get("render_settings", {})
-        for setting, value in render_settings.items():
-            try:
-                set_nested_property(render, setting, value)
-            except (AttributeError, TypeError, ValueError) as e:
-                print(f"Render 설정 적용 중 오류 발생: {setting} = {value} - {e}")
-                continue
+        if apply_render_settings:
+            render_settings = settings.get("render_settings", {})
+            for setting, value in render_settings.items():
+                try:
+                    set_nested_property(render, setting, value)
+                except (AttributeError, TypeError, ValueError) as e:
+                    print(f"Render ?? ?? ? ?? ??: {setting} = {value} - {e}")
+                    continue
 
-        # 뷰 레이어 설정 적용
-        view_layer_settings = settings.get("view_layer_settings", {})
-        for layer_name, use in view_layer_settings.items():
-            if layer_name in scene.view_layers:
-                scene.view_layers[layer_name].use = use
-            else:
-                print(f"뷰 레이어 '{layer_name}'를 찾을 수 없습니다.")
+        if apply_view_layer_settings:
+            view_layer_settings = settings.get("view_layer_settings", {})
+            for layer_name, use in view_layer_settings.items():
+                if layer_name in scene.view_layers:
+                    scene.view_layers[layer_name].use = use
+                else:
+                    print(f"? ??? '{layer_name}'? ?? ? ????.")
 
         scene.unit_settings.length_unit = 'CENTIMETERS'
 
-        # Eevee 설정 적용
-        eevee_settings = settings.get("eevee_settings", {})
-        for setting, value in eevee_settings.items():
+        if apply_render_settings:
+            eevee_settings = settings.get("eevee_settings", {})
+            for setting, value in eevee_settings.items():
+                try:
+                    setattr(eevee, setting, value)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
+            cycles_settings = settings.get("cycles_settings", {})
+            for setting, value in cycles_settings.items():
+                try:
+                    setattr(cycles, setting, value)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+
             try:
-                setattr(eevee, setting, value)
+                cycles.device = 'GPU'
+                cycles.preview_adaptive_threshold = 1
+                cycles.preview_samples = 16
+                cycles.adaptive_threshold = 0.5
+                cycles.samples = 30
+                cycles.use_preview_denoising = True
+                cycles.preview_denoiser = 'OPTIX'
+                cycles.denoiser = 'OPTIX'
+                cycles.use_denoising = True
+                cycles.sampling_pattern = 'BLUE_NOISE'
+                cycles.transparent_max_bounces = 50
+                cycles.volume_bounces = 1
+                cycles.transmission_bounces = 8
+                cycles.diffuse_bounces = 1
+                cycles.glossy_bounces = 5
+                cycles.sample_clamp_direct = 0
+                cycles.sample_clamp_indirect = 1
+                cycles.texture_limit = '1024'
+                cycles.texture_limit_render = '2048'
+                cycles.caustics_reflective = False
+                cycles.caustics_refractive = False
+                cycles.use_fast_gi = True
+                cycles.fast_gi_method = 'REPLACE'
+
+                if scene.world and scene.world.light_settings:
+                    scene.world.light_settings.ao_factor = 0
+                    scene.world.light_settings.distance = 0.1
+
+                render.use_simplify = True
+                render.simplify_subdivision_render = 2
+                render.simplify_subdivision = 0
+                render.film_transparent = True
             except (AttributeError, TypeError, ValueError) as e:
-                continue
+                print(f"Cycles ?? ?? ?? ? ?? ??: {e}")
 
-        # Cycles 설정 적용
-        cycles_settings = settings.get("cycles_settings", {})
-        for setting, value in cycles_settings.items():
-            try:
-                setattr(cycles, setting, value)
-            except (AttributeError, TypeError, ValueError) as e:
-                continue
-
-        # 추가 Cycles 설정
-        try:
-            cycles.device = 'GPU'
-            cycles.preview_adaptive_threshold = 1
-            cycles.preview_samples = 16
-            cycles.adaptive_threshold = 0.5
-            cycles.samples = 30
-            cycles.use_preview_denoising = True
-            cycles.preview_denoiser = 'OPTIX'
-            cycles.denoiser = 'OPTIX'
-            cycles.use_denoising = True
-            cycles.sampling_pattern = 'BLUE_NOISE'
-            cycles.transparent_max_bounces = 50
-            cycles.volume_bounces = 1
-            cycles.transmission_bounces = 8
-            cycles.diffuse_bounces = 1
-            cycles.glossy_bounces = 5
-            cycles.sample_clamp_direct = 0
-            cycles.sample_clamp_indirect = 1
-            cycles.texture_limit = '1024'
-            cycles.texture_limit_render = '2048'
-            cycles.caustics_reflective = False
-            cycles.caustics_refractive = False
-            cycles.use_fast_gi = True
-            cycles.fast_gi_method = 'REPLACE'
-
-            if scene.world and scene.world.light_settings:
-                scene.world.light_settings.ao_factor = 0
-                scene.world.light_settings.distance = 0.1
-
-            render.use_simplify = True
-            render.simplify_subdivision_render = 2
-            render.simplify_subdivision = 0
-            render.film_transparent = True
-        except (AttributeError, TypeError, ValueError) as e:
-            print(f"Cycles 추가 설정 적용 중 오류 발생: {e}")
-
-        # View Transform 설정
-        engine = scene.render.engine
-        if engine in {"BLENDER_EEVEE_GOO", "BLENDER_WORKBENCH_GOO"}:
-            scene.view_settings.view_transform = "Standard"
-        else:
-            try:
-                parts = scene.name.split("_")
-                sn = int(parts[1]) if len(parts) > 1 else int(getattr(bpy.context.scene.my_tool, "scene_number", 0))
-            except Exception:
-                sn = int(getattr(bpy.context.scene.my_tool, "scene_number", 0))
-
-            if sn == 10:
-                scene.view_settings.view_transform = "Filmic"
-            elif sn == 20:
+            engine = scene.render.engine
+            if engine in {"BLENDER_EEVEE_GOO", "BLENDER_WORKBENCH_GOO"}:
                 scene.view_settings.view_transform = "Standard"
-            elif sn >= 30:
-                if "Khronos PBR Neutral" in bpy.context.scene.display_settings.display_device or True:
-                    try:
-                        scene.view_settings.view_transform = "Khronos PBR Neutral"
-                    except TypeError:
-                        scene.view_settings.view_transform = "Standard"
+            else:
+                try:
+                    parts = scene.name.split("_")
+                    sn = int(parts[1]) if len(parts) > 1 else int(getattr(bpy.context.scene.my_tool, "scene_number", 0))
+                except Exception:
+                    sn = int(getattr(bpy.context.scene.my_tool, "scene_number", 0))
 
-    # def apply_compositor_settings(self, settings):
-        # tree = bpy.context.scene.node_tree
-        # if settings.get('use_compositor', None) is True:
-            # bpy.context.scene.use_nodes = True
-            # bpy.context.scene.render.use_compositing = False
+                if sn == 10:
+                    scene.view_settings.view_transform = "Filmic"
+                elif sn == 20:
+                    scene.view_settings.view_transform = "Standard"
+                elif sn >= 30:
+                    if "Khronos PBR Neutral" in bpy.context.scene.display_settings.display_device or True:
+                        try:
+                            scene.view_settings.view_transform = "Khronos PBR Neutral"
+                        except TypeError:
+                            scene.view_settings.view_transform = "Standard"
 
-            # # self.setup_nodes(tree, settings)
-        # elif settings.get('use_compositor', None) is False:
-            # bpy.context.scene.use_nodes = True
-            # bpy.context.scene.render.use_compositing = False
-
-        # # if not tree:
-            # # # bpy.context.scene.use_nodes = True
-            # # tree = bpy.context.scene.node_tree
-
-        # # 기존 노드들을 제거합니다
-        # for node in tree.nodes:
-            # tree.nodes.remove(node)
-
-        # # JSON 파일에 정의된 노드 설정을 기반으로 노드를 추가합니다
-        # for node_info in settings.get('nodes', []):
-            # add_render_layer_node(tree, node_info['layer_name'], tuple(node_info['location']), node_info.get('mute', False))
-
-        
 ################################################################
 #########################Scnene Check ##########################
 ################################################################
@@ -7116,6 +7271,8 @@ class SF_OT_SetSceneFromFile(bpy.types.Operator):
         # except Exception:
         #     pass
 
+        save_recent_browser_state(context, force=True)
+
         self.report({'INFO'},
             f"프로젝트:{project}, 씬:{scene_number}, 컷:{cut_number}, 버전:{target_ver}"
             + (f", 접미사:{suffix}" if suffix else "")
@@ -7266,6 +7423,22 @@ def normalize_version_to_line(filepath: str):
             return os.path.normpath(os.sep.join(parts))
     return filepath
 
+def find_layer_collection_by_collection_name(layer_collection, collection_name):
+    if layer_collection.collection.name == collection_name:
+        return layer_collection
+
+    for child in layer_collection.children:
+        found = find_layer_collection_by_collection_name(child, collection_name)
+        if found:
+            return found
+
+    return None
+
+def set_layer_collection_holdout_recursive(layer_collection, value=True):
+    layer_collection.holdout = value
+    for child in layer_collection.children:
+        set_layer_collection_holdout_recursive(child, value)
+
 from bpy.props import EnumProperty
 
 class SF_OT_UpdateToCyclesIndependent(bpy.types.Operator):
@@ -7350,7 +7523,20 @@ class SF_OT_UpdateToCyclesIndependent(bpy.types.Operator):
             sc.render.engine = 'BLENDER_EEVEE_NEXT'
         else:
             sc.render.engine = 'BLENDER_EEVEE'
+        bpy.context.scene.view_settings.view_transform = 'Standard'
         print(f"[INFO] EEVEE 세팅 완료: {sc.render.engine}")
+
+        line_vl = scene.view_layers.get("line_vl")
+        if line_vl:
+            current_vl = bpy.context.window.view_layer
+            bpy.context.window.view_layer = line_vl
+            ch_layer_col = find_layer_collection_by_collection_name(line_vl.layer_collection, "ch_col")
+            if ch_layer_col:
+                set_layer_collection_holdout_recursive(ch_layer_col, True)
+                print("[INFO] line_vl ch_col and children holdout ON")
+            else:
+                print("[WARN] line_vl에서 ch_col LayerCollection을 찾지 못했습니다.")
+            bpy.context.window.view_layer = current_vl
 
         # --- D. chOutline_col + chOutline 생성 ---
         outline_col_name = "chOutline_col"
@@ -7612,16 +7798,44 @@ class SF_OT_ClearBakeOutline(bpy.types.Operator):
 
         return {'FINISHED'}
 
+def _sync_reset_to_pub_all_flags(operator, context):
+    value = bool(getattr(operator, "toggle_all", False))
+    operator.replace_lights = value
+    operator.replace_mesh = value
+    operator.replace_materials = value
+    operator.replace_modifiers = value
+    operator.replace_texture_links = value
+
 class SF_OT_UpdateFromPublish(bpy.types.Operator):
     bl_idname = "sf.update_from_publish"
     bl_label = "Update From Publish (Smart)"
     bl_description = "기존 어셋을 삭제하고 최신 소스 파일(mod)로 교체(Re-Import)합니다"
     bl_options = {'REGISTER', 'UNDO'}
 
+    toggle_all: bpy.props.BoolProperty(name="ALL", default=False, update=_sync_reset_to_pub_all_flags)
+    replace_lights: bpy.props.BoolProperty(name="Lights", default=False)
+    replace_mesh: bpy.props.BoolProperty(name="Mesh", default=True)
+    replace_materials: bpy.props.BoolProperty(name="Material", default=True)
+    replace_modifiers: bpy.props.BoolProperty(name="Modifier", default=True)
+    replace_texture_links: bpy.props.BoolProperty(name="Texture", default=True)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=320)
+
+    def draw(self, context):
+        layout = self.layout
+        grid = layout.grid_flow(row_major=True, columns=3, even_columns=True, even_rows=True, align=True)
+        grid.prop(self, "toggle_all")
+        grid.prop(self, "replace_lights")
+        grid.prop(self, "replace_mesh")
+        grid.prop(self, "replace_materials")
+        grid.prop(self, "replace_modifiers")
+        grid.prop(self, "replace_texture_links")
+
     def execute(self, context):
         scene = context.scene
         updated_count = 0
-        
+
         # 1. 전역 설정에서 경로 및 접두사 로드 (BTS 지원)
         base_drive = get_project_paths() # "B:\", "S:\" 등
         prefix = get_project_prefix()    # "BTS", "DSC" 등
@@ -7643,11 +7857,12 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
         # 2. 각 어셋에 대해 '삭제 후 재임포트' 수행
         for cat_name, asset_name in selected_items:
             print(f"--- [Reset to Pub] {asset_name} ({cat_name}) ---")
-            
-            # (1) 기존 어셋 삭제 (Collection & Objects)
-            self.delete_asset_collections(asset_name)
-            
-            # (2) 퍼블리시(Source Mod) 파일 경로 구성
+            preserved_modifiers = None
+
+            if self.replace_mesh and not self.replace_modifiers:
+                preserved_modifiers = self.snapshot_collection_modifiers(asset_name)
+
+            # (1) 퍼블리시(Source Mod) 파일 경로 구성
             folder_map = cat_name # 'ch', 'bg', 'prop'
             
             blend_path = os.path.join(base_drive, "assets", folder_map, asset_name, "mod", f"{asset_name}.blend")
@@ -7657,7 +7872,7 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
                 self.report({'WARNING'}, f"파일 없음: {blend_path}")
                 continue
 
-            # (3) USD 캐시 경로 구성 (임포트 후 자동 연결용)
+            # (2) USD 캐시 경로 구성 (임포트 후 자동 연결용)
             sn = scene.my_tool.scene_number
             cn = scene.my_tool.cut_number
             cache_dir = os.path.join(base_drive, "scenes", sn, cn, "ren", "cache").replace("\\", "/")
@@ -7674,9 +7889,39 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
                         usd_file_name = f
                         break
 
-            # (4) 재임포트 실행
             try:
-                self.reimport_asset(blend_path, cat_name, asset_name, context, usd_path, usd_file_name)
+                if self.replace_mesh or self.replace_lights:
+                    self.reimport_asset(
+                        blend_path,
+                        cat_name,
+                        asset_name,
+                        context,
+                        usd_path,
+                        usd_file_name,
+                        replace_mesh=self.replace_mesh,
+                        replace_lights=self.replace_lights,
+                        replace_modifiers=self.replace_modifiers,
+                    )
+
+                    if self.replace_mesh and not self.replace_materials:
+                        self.rebind_collection_materials_to_existing_scene(asset_name)
+
+                    if preserved_modifiers:
+                        self.restore_collection_modifiers(asset_name, preserved_modifiers)
+
+                if self.replace_modifiers and not self.replace_mesh:
+                    published_modifiers = self.snapshot_collection_modifiers_from_blend(blend_path, asset_name)
+                    if published_modifiers:
+                        self.restore_collection_modifiers(asset_name, published_modifiers)
+
+                if self.replace_materials:
+                    self.update_asset_materials(
+                        context,
+                        blend_path,
+                        asset_name,
+                        preserve_texture_links=not self.replace_texture_links,
+                    )
+
                 updated_count += 1
             except Exception as e:
                 print(f"[Error] {asset_name} 업데이트 실패: {e}")
@@ -7684,22 +7929,143 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
         self.report({'INFO'}, f"총 {updated_count}개 어셋 최신화 완료 (Delete & Re-Import)")
         return {'FINISHED'}
 
-    def delete_asset_collections(self, asset_name):
-        """기존 컬렉션을 삭제"""
-        for suffix in ["_col", "_light_col"]:
+    def delete_collection_recursive(self, collection):
+        if not collection:
+            return
+
+        for child in list(collection.children):
+            self.delete_collection_recursive(child)
+
+        for obj in list(collection.objects):
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+        bpy.data.collections.remove(collection)
+
+    def delete_asset_collections(self, asset_name, replace_mesh=True, replace_lights=True):
+        """옵션에 따라 기존 컬렉션을 삭제"""
+        suffixes = []
+        if replace_mesh:
+            suffixes.append("_col")
+        if replace_lights:
+            suffixes.append("_light_col")
+
+        for suffix in suffixes:
             col = bpy.data.collections.get(asset_name + suffix)
             if col:
-                for obj in col.objects:
-                    bpy.data.objects.remove(obj, do_unlink=True)
-                bpy.data.collections.remove(col)
+                self.delete_collection_recursive(col)
 
-    def reimport_asset(self, blend_path, cat_name, asset_name, context, usd_path, usd_file_name):
+    def get_modifier_target_key(self, obj):
+        return obj.name.split(".")[0]
+
+    def snapshot_collection_modifiers(self, asset_name):
+        asset_col = bpy.data.collections.get(f"{asset_name}_col")
+        if not asset_col:
+            return {}
+
+        return self.snapshot_modifiers_for_collection(asset_col)
+
+    def snapshot_modifiers_for_collection(self, collection):
+        snapshot = {}
+        for obj in collection.all_objects:
+            if obj.type != 'MESH':
+                continue
+
+            key = self.get_modifier_target_key(obj)
+            modifier_data = []
+
+            for mod in obj.modifiers:
+                item = {
+                    "name": mod.name,
+                    "type": mod.type,
+                    "properties": {},
+                }
+
+                for prop in mod.bl_rna.properties:
+                    identifier = prop.identifier
+                    if identifier in {"name", "type", "rna_type"} or prop.is_readonly:
+                        continue
+
+                    try:
+                        value = getattr(mod, identifier)
+                    except Exception:
+                        continue
+
+                    try:
+                        if hasattr(value, "copy"):
+                            value = value.copy()
+                        elif isinstance(value, (list, tuple)):
+                            value = tuple(value)
+                    except Exception:
+                        pass
+
+                    item["properties"][identifier] = value
+
+                modifier_data.append(item)
+
+            snapshot[key] = modifier_data
+
+        return snapshot
+
+    def snapshot_collection_modifiers_from_blend(self, blend_path, asset_name):
+        target_col_name = f"{asset_name}_col"
+
+        with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
+            if target_col_name not in data_from.collections:
+                return {}
+            data_to.collections = [target_col_name]
+
+        imported_col = next((col for col in data_to.collections if col), None)
+        if not imported_col:
+            return {}
+
+        snapshot = self.snapshot_modifiers_for_collection(imported_col)
+        self.delete_collection_recursive(imported_col)
+        return snapshot
+
+    def restore_collection_modifiers(self, asset_name, snapshot):
+        asset_col = bpy.data.collections.get(f"{asset_name}_col")
+        if not asset_col or not snapshot:
+            return
+
+        for obj in asset_col.all_objects:
+            if obj.type != 'MESH':
+                continue
+
+            key = self.get_modifier_target_key(obj)
+            modifier_data = snapshot.get(key)
+            if modifier_data is None:
+                continue
+
+            while obj.modifiers:
+                obj.modifiers.remove(obj.modifiers[0])
+
+            for item in modifier_data:
+                try:
+                    new_mod = obj.modifiers.new(name=item["name"], type=item["type"])
+                except Exception as e:
+                    print(f"[ModifierRestore][SKIP] {obj.name}/{item['name']}: {e}")
+                    continue
+
+                for identifier, value in item["properties"].items():
+                    try:
+                        setattr(new_mod, identifier, value)
+                    except Exception:
+                        continue
+
+    def reimport_asset(self, blend_path, cat_name, asset_name, context, usd_path, usd_file_name, replace_mesh=True, replace_lights=True, replace_modifiers=True):
         """Source Blend에서 컬렉션을 가져오고 USD를 연결"""
         target_col_name = f"{asset_name}_col"
         light_col_name = f"{asset_name}_light_col"
+
+        self.delete_asset_collections(asset_name, replace_mesh=replace_mesh, replace_lights=replace_lights)
         
         with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
-            cols = [c for c in data_from.collections if c in [target_col_name, light_col_name]]
+            wanted = []
+            if replace_mesh:
+                wanted.append(target_col_name)
+            if replace_lights:
+                wanted.append(light_col_name)
+            cols = [c for c in data_from.collections if c in wanted]
             data_to.collections = cols
             
         parent_col_name = f"{cat_name}_col"
@@ -7711,8 +8077,114 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
         for col in data_to.collections:
             if col:
                 p_col.children.link(col)
-                if usd_path and os.path.exists(usd_path):
+                if replace_mesh and replace_modifiers and col.name == target_col_name and usd_path and os.path.exists(usd_path):
                     self.apply_cache(col, asset_name, usd_path, usd_file_name)
+
+    def update_asset_materials(self, context, blend_file_path, asset_name, preserve_texture_links=False):
+        asset_col = bpy.data.collections.get(f"{asset_name}_col")
+        if not asset_col:
+            print(f"[MaterialUpdate][SKIP] {asset_name}_col not found.")
+            return
+
+        with bpy.data.libraries.load(blend_file_path, link=False) as (data_from, data_to):
+            data_to.materials = data_from.materials
+
+        loaded_materials = [mat for mat in data_to.materials if mat]
+        if not loaded_materials:
+            print(f"[MaterialUpdate][SKIP] no materials loaded from {blend_file_path}")
+            return
+
+        materials_dict = {}
+        for mat in loaded_materials:
+            processed_name = mat.name.split(".")[0].lower()
+            materials_dict[processed_name] = mat
+
+        def walk_collection(col):
+            for obj in col.objects:
+                if obj.type != 'MESH':
+                    continue
+                if preserve_texture_links:
+                    self.update_object_material_values_only(obj, materials_dict)
+                else:
+                    self.replace_object_materials(obj, loaded_materials)
+            for child in col.children:
+                walk_collection(child)
+
+        walk_collection(asset_col)
+
+    def rebind_collection_materials_to_existing_scene(self, asset_name):
+        asset_col = bpy.data.collections.get(f"{asset_name}_col")
+        if not asset_col:
+            return
+
+        def walk_collection(col):
+            for obj in col.objects:
+                if obj.type == 'MESH':
+                    apply_matching_materials(obj)
+            for child in col.children:
+                walk_collection(child)
+
+        walk_collection(asset_col)
+
+    def replace_object_materials(self, obj, original_materials):
+        for slot in obj.material_slots:
+            if not slot.material:
+                continue
+
+            scene_material_name = slot.material.name.split(".")[0].lower()
+            matching_material = next(
+                (mat for mat in original_materials if mat.name.split(".")[0].lower() == scene_material_name),
+                None
+            )
+
+            if matching_material:
+                slot.material = matching_material
+
+    def update_object_material_values_only(self, obj, source_materials):
+        for slot in obj.material_slots:
+            if not slot.material:
+                continue
+
+            scene_material_name = slot.material.name.split(".")[0].lower()
+            source_mat = source_materials.get(scene_material_name)
+            if not source_mat:
+                continue
+
+            self.copy_material_values_preserve_links(slot.material, source_mat)
+
+    def copy_material_values_preserve_links(self, target_mat, source_mat):
+        if not (target_mat and source_mat and target_mat.use_nodes and source_mat.use_nodes):
+            return
+        if not (target_mat.node_tree and source_mat.node_tree):
+            return
+
+        target_nodes = {node.name: node for node in target_mat.node_tree.nodes}
+
+        for source_node in source_mat.node_tree.nodes:
+            target_node = target_nodes.get(source_node.name)
+            if not target_node or target_node.type != source_node.type:
+                continue
+
+            for attr_name in ("mute", "hide", "label"):
+                if hasattr(target_node, attr_name) and hasattr(source_node, attr_name):
+                    try:
+                        setattr(target_node, attr_name, getattr(source_node, attr_name))
+                    except Exception:
+                        pass
+
+            for src_input, dst_input in zip(getattr(source_node, "inputs", []), getattr(target_node, "inputs", [])):
+                if dst_input.is_linked:
+                    continue
+                if not hasattr(src_input, "default_value") or not hasattr(dst_input, "default_value"):
+                    continue
+                try:
+                    src_value = src_input.default_value
+                    if isinstance(src_value, (float, int, bool, str)):
+                        dst_input.default_value = src_value
+                    else:
+                        dst_input.default_value = tuple(src_value)
+                except Exception:
+                    pass
 
     def apply_cache(self, collection, asset_name, usd_path, usd_file_name):
         for obj in collection.all_objects:
@@ -7973,6 +8445,9 @@ def get_render_preset_json_path(project_name=None):
     return os.path.join(base_path, "_json", "renderPreset.json")
 
 
+_render_preset_cache = {}
+
+
 def load_render_presets(project_name=None):
     """
     현재 프로젝트의 _json/renderPreset.json 을 읽어 프리셋 딕셔너리 반환
@@ -7988,6 +8463,11 @@ def load_render_presets(project_name=None):
         return {}
 
     try:
+        mtime = os.path.getmtime(json_path)
+        cached = _render_preset_cache.get(json_path)
+        if cached and cached.get("mtime") == mtime:
+            return dict(cached.get("data", {}))
+
         with open(json_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
 
@@ -7995,8 +8475,11 @@ def load_render_presets(project_name=None):
             print(f"[RenderPreset] JSON 최상위 구조가 dict가 아닙니다: {json_path}")
             return {}
 
-        print(f"[RenderPreset] 로드 완료: {json_path}")
-        return data
+        _render_preset_cache[json_path] = {
+            "mtime": mtime,
+            "data": dict(data),
+        }
+        return dict(data)
 
     except Exception as e:
         print(f"[RenderPreset] JSON 불러오기 실패: {json_path} / {e}")
@@ -8502,7 +8985,6 @@ class SF_UI_BuildTab:
         row = box_main.row(align=True)        
         row.scale_y = 1.3
         row.operator("sf.build_scene_operator", text="Build Scene", icon='MOD_BUILD')
-        row.operator("sf.view_layer_setup", text="Set ViewLayer", icon='RENDERLAYERS')
 
         row = box_main.row(align=True)
         row.prop(scene, "render_preset_enum", text="Preset")
@@ -8725,30 +9207,42 @@ class SF_UI_ToolsTab:
 
         # 🔥 여기서부터 수정된 SFpaint Global Control 부분 🔥
         box_paint = layout.box()
-        box_paint.label(text="SFpaint Global Control", icon='NODETREE')
-        
-        # 1. 수치 입력칸 4개 깔끔하게 정렬
-        row = box_paint.row(align=True)
-        row.label(text="Emit")
-        row.prop(context.scene.my_tool, "sfpaint_emission_strength", text="")
+        icon = 'TRIA_DOWN' if scene.sf_show_sfpaint_global else 'TRIA_RIGHT'
+        box_paint.prop(scene, "sf_show_sfpaint_global", text="SFpaint Global Control", icon=icon, emboss=False)
 
-        row = box_paint.row(align=True)
-        row.label(text="Mask_Int")
-        row.prop(context.scene.my_tool, "sfpaint_mask_int", text="")
+        if scene.sf_show_sfpaint_global:
+            # 1. 수치 입력칸 4개 깔끔하게 정렬
+            row = box_paint.row(align=True)
+            row.label(text="Emit")
+            row.prop(context.scene.my_tool, "sfpaint_emission_strength", text="")
 
-        row = box_paint.row(align=True)
-        row.label(text="Brusk_Int")
-        row.prop(context.scene.my_tool, "sfpaint_brusk_int", text="")
+            row = box_paint.row(align=True)
+            row.label(text="Mask_Int")
+            row.prop(context.scene.my_tool, "sfpaint_mask_int", text="")
 
-        row = box_paint.row(align=True)
-        row.label(text="Noise Int")
-        row.prop(context.scene.my_tool, "sfpaint_noise_int", text="")
+            row = box_paint.row(align=True)
+            row.label(text="Brusk_Int")
+            row.prop(context.scene.my_tool, "sfpaint_brusk_int", text="")
 
-        # 2. 맨 아래에 전체 적용(Apply) 버튼을 크고 시원하게 배치!
-        box_paint.separator(factor=0.5)
-        row_apply = box_paint.row()
-        row_apply.scale_y = 1.3
-        row_apply.operator("sf.apply_sfpaint_global_control", text="Apply All SFpaint Settings", icon='CHECKMARK')
+            row = box_paint.row(align=True)
+            row.label(text="Noise Int")
+            row.prop(context.scene.my_tool, "sfpaint_noise_int", text="")
+
+            # 2. 맨 아래에 전체 적용(Apply) 버튼을 크고 시원하게 배치!
+            box_paint.separator(factor=0.5)
+            row_apply = box_paint.row()
+            row_apply.scale_y = 1.3
+            row_apply.operator("sf.apply_sfpaint_global_control", text="Apply All SFpaint Settings", icon='CHECKMARK')
+
+        box_sticky = layout.box()
+        box_sticky.label(text="StickyGP", icon='GREASEPENCIL')
+        row = box_sticky.row()
+        row.scale_y = 1.3
+        row.operator("sf.sticky_gp_auto_setup", text="Auto Setup")
+        row = box_sticky.row(align=True)
+        row.scale_y = 1.3
+        row.operator("sf.sticky_gp_stick", text="Stick")
+        row.operator("sf.sticky_gp_unstick", text="Unstick")
 
 
 # ==============================================================================
@@ -8842,14 +9336,23 @@ class SF_OT_ToggleAllOperator(bpy.types.Operator):
 def auto_set_browser_fields():
     import bpy, os
     filepath = bpy.data.filepath.replace("\\", "/")
-    parts = filepath.split("/")
-
-    if len(parts) < 5:
-        print("[WARN] 경로 구조가 예상과 다름:", filepath)
+    if not filepath:
         return
 
-    scene_number = parts[2]
-    cut_number   = parts[3]
+    scene_number = ""
+    cut_number = ""
+
+    path_match = re.search(r"/scenes/([^/]+)/([^/]+)/ren/", filepath)
+    if path_match:
+        scene_number, cut_number = path_match.groups()
+    else:
+        file_match = re.search(r"_([0-9]{4})_([0-9]{4})_ren_", os.path.basename(filepath))
+        if file_match:
+            scene_number, cut_number = file_match.groups()
+
+    if not scene_number or not cut_number:
+        return
+
     blend_file_name = os.path.basename(filepath)                 # DSC_0100_0230_ren_v002_ch.blend
     blend_file_noext = os.path.splitext(blend_file_name)[0]      # DSC_0100_0230_ren_v002_ch
 
@@ -8875,6 +9378,8 @@ def auto_set_browser_fields():
                 print(f"[WARN] enum '{enum_value}' not in {enum_items}")
         else:
             props.blend_file = enum_value  # fallback (enum_items 없음)
+
+        save_recent_browser_state(force=True)
 
 
 class SF_OT_DisableOutline(bpy.types.Operator):
@@ -8910,6 +9415,269 @@ class SF_OT_EnableOutline(bpy.types.Operator):
                     count += 1
         self.report({'INFO'}, f"Enabled {count} SF_Outline modifiers.")
         return {'FINISHED'}
+
+
+def run_sticky_gp_modifier(context, unstick=False):
+    obj = context.object
+    if not obj or obj.type not in {'GREASEPENCIL', 'GPENCIL'}:
+        return False, "Grease Pencil object is not selected."
+
+    source_mod = None
+    for mod in obj.modifiers:
+        node_group = getattr(mod, "node_group", None)
+        if node_group and node_group.name.startswith(STICKY_GP_STORE_GROUP):
+            source_mod = mod
+            break
+
+    if source_mod is None:
+        for mod in obj.modifiers:
+            node_group = getattr(mod, "node_group", None)
+            if node_group and "store" in node_group.name.lower() and "Socket_3" in mod.keys():
+                source_mod = mod
+                break
+
+    if source_mod is None:
+        return False, "StickyGP Store UVs modifier was not found."
+
+    override = context.copy()
+    override["object"] = obj
+    override["active_object"] = obj
+    override["modifier"] = source_mod
+
+    try:
+        before_names = {mod.name for mod in obj.modifiers}
+        with context.temp_override(**override):
+            bpy.ops.object.modifier_copy(modifier=source_mod.name)
+
+        copied_mod = None
+        for mod in reversed(obj.modifiers):
+            if mod.name not in before_names:
+                copied_mod = mod
+                break
+        copied_mod = copied_mod or obj.modifiers[-1]
+
+        if "Socket_3" not in copied_mod.keys():
+            return False, "StickyGP modifier does not have Socket_3."
+
+        copied_mod["Socket_3"] = bool(unstick)
+        copied_mod.show_viewport = True
+        if getattr(copied_mod, "node_group", None):
+            copied_mod.node_group.interface_update(context)
+
+        with context.temp_override(object=obj, active_object=obj):
+            bpy.ops.object.modifier_apply(modifier=copied_mod.name)
+    except Exception as e:
+        return False, f"StickyGP failed: {e}"
+
+    return True, "StickyGP Unstick complete." if unstick else "StickyGP Stick complete."
+
+
+STICKY_GP_STORE_GROUP = "GN-stickyGP-store_uvs"
+STICKY_GP_DEFORM_GROUP = "GN-stickyGP-deform"
+STICKY_GP_TEMPLATE_PATHS = [
+    r"C:\_json\stickyGP.blend",
+    r"C:\_json\StickyGP.blend",
+    r"C:\_json\rrRender_stickyGP.blend",
+]
+
+
+def find_sticky_gp_node_group(group_name):
+    group = bpy.data.node_groups.get(group_name)
+    if group:
+        return group
+
+    group_name_lower = group_name.lower()
+    for node_group in bpy.data.node_groups:
+        if group_name_lower in node_group.name.lower():
+            return node_group
+
+    return None
+
+
+def append_sticky_gp_node_group_from_template(group_name):
+    for template_path in STICKY_GP_TEMPLATE_PATHS:
+        if not os.path.exists(template_path):
+            continue
+
+        try:
+            with bpy.data.libraries.load(template_path, link=False) as (data_from, data_to):
+                if group_name in data_from.node_groups:
+                    data_to.node_groups = [group_name]
+                else:
+                    matches = [name for name in data_from.node_groups if group_name.lower() in name.lower()]
+                    if not matches:
+                        continue
+                    data_to.node_groups = [matches[0]]
+
+            group = find_sticky_gp_node_group(group_name)
+            if group:
+                print(f"[StickyGP] Appended node group '{group.name}' from {template_path}")
+                return group
+        except Exception as e:
+            print(f"[StickyGP][WARN] Failed to append '{group_name}' from {template_path}: {e}")
+
+    return None
+
+
+def ensure_sticky_gp_node_group(group_name):
+    return find_sticky_gp_node_group(group_name) or append_sticky_gp_node_group_from_template(group_name)
+
+
+def set_nodes_modifier_input(modifier, input_name, value):
+    node_group = getattr(modifier, "node_group", None)
+    if not node_group:
+        return False
+
+    input_name_lower = input_name.lower()
+    interface_items = getattr(getattr(node_group, "interface", None), "items_tree", [])
+    for item in interface_items:
+        if getattr(item, "item_type", None) != 'SOCKET':
+            continue
+        if getattr(item, "in_out", None) != 'INPUT':
+            continue
+        if getattr(item, "name", "").lower() != input_name_lower:
+            continue
+
+        identifier = getattr(item, "identifier", "")
+        if not identifier:
+            continue
+        try:
+            modifier[identifier] = value
+            return True
+        except Exception:
+            continue
+
+    return False
+
+
+def ensure_sticky_gp_target_collection(mesh_objects):
+    base_name = mesh_objects[0].name if mesh_objects else "Target"
+    collection_name = f"StickyGP_Target_{base_name}"
+    collection = bpy.data.collections.get(collection_name)
+    if not collection:
+        collection = bpy.data.collections.new(collection_name)
+        bpy.context.scene.collection.children.link(collection)
+
+    for obj in mesh_objects:
+        if obj.name not in collection.objects:
+            collection.objects.link(obj)
+
+    return collection
+
+
+def get_or_create_sticky_gp_object(context, target_name):
+    gp_types = {'GREASEPENCIL', 'GPENCIL'}
+    if context.object and context.object.type in gp_types:
+        return context.object
+
+    for obj in context.selected_objects:
+        if obj.type in gp_types:
+            return obj
+
+    gp_name = f"StickyGP_{target_name}"
+    existing = bpy.data.objects.get(gp_name)
+    if existing and existing.type in gp_types:
+        return existing
+
+    try:
+        bpy.ops.object.grease_pencil_add(type='EMPTY', align='WORLD', location=(0, 0, 0))
+    except Exception:
+        bpy.ops.object.gpencil_add(type='EMPTY', align='WORLD', location=(0, 0, 0))
+
+    gp_obj = bpy.context.object
+    gp_obj.name = gp_name
+    return gp_obj
+
+
+def ensure_sticky_gp_modifier(gp_obj, node_group, modifier_name, target_collection):
+    modifier = None
+    for mod in gp_obj.modifiers:
+        if getattr(mod, "node_group", None) == node_group:
+            modifier = mod
+            break
+
+    if modifier is None:
+        modifier = gp_obj.modifiers.new(name=modifier_name, type='NODES')
+        modifier.node_group = node_group
+
+    if not set_nodes_modifier_input(modifier, "Collection", target_collection):
+        print(f"[StickyGP][WARN] Could not set Collection input on {modifier.name}")
+    modifier.show_viewport = True
+    return modifier
+
+
+class SF_OT_StickyGPAutoSetup(bpy.types.Operator):
+    bl_idname = "sf.sticky_gp_auto_setup"
+    bl_label = "StickyGP - Auto Setup"
+    bl_description = "Create StickyGP target collection and add StickyGP modifiers automatically"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return any(obj.type == 'MESH' for obj in context.selected_objects)
+
+    def execute(self, context):
+        mesh_objects = [obj for obj in context.selected_objects if obj.type == 'MESH']
+        if not mesh_objects:
+            self.report({'ERROR'}, "Select at least one mesh target.")
+            return {'CANCELLED'}
+
+        store_group = ensure_sticky_gp_node_group(STICKY_GP_STORE_GROUP)
+        deform_group = ensure_sticky_gp_node_group(STICKY_GP_DEFORM_GROUP)
+        if not store_group or not deform_group:
+            self.report({'ERROR'}, "StickyGP node groups were not found. Put stickyGP.blend in C:\\_json or create the node groups in this scene.")
+            return {'CANCELLED'}
+
+        target_collection = ensure_sticky_gp_target_collection(mesh_objects)
+        gp_obj = get_or_create_sticky_gp_object(context, mesh_objects[0].name)
+
+        store_mod = ensure_sticky_gp_modifier(gp_obj, store_group, "StickyGP Store UVs", target_collection)
+        deform_mod = ensure_sticky_gp_modifier(gp_obj, deform_group, "StickyGP Deform", target_collection)
+
+        try:
+            gp_obj.modifiers.move(gp_obj.modifiers.find(store_mod.name), 0)
+            gp_obj.modifiers.move(gp_obj.modifiers.find(deform_mod.name), len(gp_obj.modifiers) - 1)
+        except Exception as e:
+            print(f"[StickyGP][WARN] Could not reorder modifiers: {e}")
+
+        bpy.ops.object.select_all(action='DESELECT')
+        gp_obj.select_set(True)
+        context.view_layer.objects.active = gp_obj
+
+        self.report({'INFO'}, f"StickyGP ready: {gp_obj.name} -> {target_collection.name}")
+        return {'FINISHED'}
+
+
+class SF_OT_StickyGPStick(bpy.types.Operator):
+    bl_idname = "sf.sticky_gp_stick"
+    bl_label = "StickyGP - Stick"
+    bl_description = "Stick selected Grease Pencil strokes with the StickyGP modifier"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None and context.object.type in {'GREASEPENCIL', 'GPENCIL'}
+
+    def execute(self, context):
+        ok, message = run_sticky_gp_modifier(context, unstick=False)
+        self.report({'INFO'} if ok else {'ERROR'}, message)
+        return {'FINISHED'} if ok else {'CANCELLED'}
+
+
+class SF_OT_StickyGPUnstick(bpy.types.Operator):
+    bl_idname = "sf.sticky_gp_unstick"
+    bl_label = "StickyGP - Unstick"
+    bl_description = "Unstick selected Grease Pencil strokes with the StickyGP modifier"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        return context.object is not None and context.object.type in {'GREASEPENCIL', 'GPENCIL'}
+
+    def execute(self, context):
+        ok, message = run_sticky_gp_modifier(context, unstick=True)
+        self.report({'INFO'} if ok else {'ERROR'}, message)
+        return {'FINISHED'} if ok else {'CANCELLED'}
 
 
 ################################################################
@@ -9020,12 +9788,16 @@ classes = [
     SF_OT_ClearSelectedMaterials,
     SF_OT_ClearSelectedMaterialsPopup,
     SF_OT_ApplySFpaintGlobalControl,
+    SF_OT_StickyGPAutoSetup,
+    SF_OT_StickyGPStick,
+    SF_OT_StickyGPUnstick,
     SF_OT_SetOutputFormat,
     SF_OT_DeleteSolidifyLine,
     OBJECT_OT_remove_shell
 ]
 
-_auto_browser_timer = None  # 전역 변수로 선언
+_auto_browser_timer = None
+_recent_browser_state_timer = None  # 전역 변수로 선언
 
 def register():
     # ✅ 1. 6개 탭 아이콘 및 순서 재배치 (CACHE ↔ MASK_PASS)
@@ -9041,7 +9813,7 @@ def register():
         default='BUILD'
     )
         
-    global _auto_browser_timer
+    global _auto_browser_timer, _recent_browser_state_timer
 
     # ✅ 2. 모든 클래스 일괄 등록
     for cls in classes:
@@ -9057,6 +9829,7 @@ def register():
     bpy.types.Scene.sf_file_categories = bpy.props.CollectionProperty(type=FileCategory)
     bpy.types.Scene.sf_mat_switcher = bpy.props.PointerProperty(type=SF_MaterialSwitcherProperties)
     bpy.types.Scene.sf_show_advanced = bpy.props.BoolProperty(name="Show Tools", default=False)
+    bpy.types.Scene.sf_show_sfpaint_global = bpy.props.BoolProperty(name="Show SFpaint Global Control", default=False)
     
     bpy.types.Scene.render_preset_enum = bpy.props.EnumProperty(
         name="Render Preset",
@@ -9071,11 +9844,12 @@ def register():
         bpy.app.handlers.load_post.append(run_set_scene_from_file)
 
     _auto_browser_timer = bpy.app.timers.register(auto_set_browser_fields, first_interval=0.5)
+    _recent_browser_state_timer = bpy.app.timers.register(restore_recent_browser_state, first_interval=0.8)
     register_scene_loader_handler()
 
 
 def unregister():
-    global _auto_browser_timer
+    global _auto_browser_timer, _recent_browser_state_timer
 
     # ✅ 1. 타이머 완전 해제
     if _auto_browser_timer:
@@ -9084,6 +9858,13 @@ def unregister():
         except Exception:
             pass
         _auto_browser_timer = None
+
+    if _recent_browser_state_timer:
+        try:
+            bpy.app.timers.unregister(restore_recent_browser_state)
+        except Exception:
+            pass
+        _recent_browser_state_timer = None
 
     # ✅ 2. 메뉴 해제
     try:
@@ -9110,6 +9891,7 @@ def unregister():
         "sf_file_categories",
         "sf_mat_switcher",
         "sf_show_advanced",   # <--- 이것도 확실히 지워줍니다.
+        "sf_show_sfpaint_global",
         "render_preset_enum",
     ]
     for prop_name in scene_props:
@@ -9137,6 +9919,7 @@ def load_post_handler(dummy):
         if hasattr(scene, "my_tool") and hasattr(scene.my_tool, "scene_number") and hasattr(scene.my_tool, "cut_number"):
             scene.my_tool.scene_number = scene_number
             scene.my_tool.cut_number = cut_number
+            save_recent_browser_state(force=True)
             print(f"[LOAD] 씬/컷 자동 설정됨: {scene_number} / {cut_number}")
 
             # ✅ UI 강제 새로고침 (기존 PROPERTIES 뿐만 아니라 VIEW_3D 창도 새로고침!)
