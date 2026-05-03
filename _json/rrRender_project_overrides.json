@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "projects": {
+    "THE_TRAP": {
+      "asset_registry": [],
+      "cache_overrides": []
+    },
+    "ARBOBION": {
+      "asset_registry": [],
+      "cache_overrides": []
+    },
+    "DSC": {
+      "asset_registry": [],
+      "cache_overrides": []
+    },
+    "BTS": {
+      "asset_registry": [],
+      "cache_overrides": []
+    },
+    "FUZZ": {
+      "asset_registry": [],
+      "cache_overrides": []
+    },
+    "COC": {
+      "asset_registry": [],
+      "cache_overrides": []
+    }
+  }
+}

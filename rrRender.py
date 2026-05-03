@@ -24,42 +24,150 @@ import sys
 import shutil
 import importlib
 from datetime import datetime
+from copy import deepcopy
+
+THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+SHARED_MODULE_SEARCH_PATHS = [
+    THIS_DIR,
+    r"C:\Users\hwang\Desktop\codex\rrRender",
+]
+for search_path in SHARED_MODULE_SEARCH_PATHS:
+    if search_path and os.path.isdir(search_path) and search_path not in sys.path:
+        sys.path.append(search_path)
+
+try:
+    from pipeline_shared import (
+        build_legacy_rrrender_project_entry,
+        get_project_entry as get_pipeline_project_entry,
+        get_project_names as get_pipeline_project_names,
+        load_pipeline_config,
+        save_pipeline_config,
+        sync_legacy_rrrender_paths_json,
+    )
+    PIPELINE_SHARED_AVAILABLE = True
+except Exception:
+    build_legacy_rrrender_project_entry = None
+    get_pipeline_project_entry = None
+    get_pipeline_project_names = None
+    load_pipeline_config = None
+    save_pipeline_config = None
+    sync_legacy_rrrender_paths_json = None
+    PIPELINE_SHARED_AVAILABLE = False
 
 # -------------------------------------------------------------------
 # ✅ [Global] 프로젝트별 설정 정의 (단일 소스)
 # -------------------------------------------------------------------
-PROJECT_CONFIG = {
+PROJECT_SETTINGS_DIR = r"M:\RND\SFtools\2023\render\_json"
+PROJECT_SETTINGS_FILENAME = "rrRender_project_paths.json"
+PROJECT_SCHEMA_FILENAME = "rrRender_project_schema.json"
+PROJECT_OVERRIDE_FILENAME = "rrRender_project_overrides.json"
+HWANG_LOCAL_PROJECT_SETTINGS_SOURCE_DIR = r"C:\Users\hwang\Desktop\codex\rrRender\_json"
+HWANG_RUNTIME_PROJECT_SETTINGS_DIR = r"C:\_json\rrRender_dev"
+
+DEFAULT_PROJECT_CONFIG = {
     'THE_TRAP': {
         'drive': "T:/",
         'prefix': "ttm",
-        'cache_dir': "ren/cache",
+        'asset_base': "T:/assets",
+        'scene_base': "T:/",
+        'project_json_base': "T:/",
+        'output_base': "T:/",
+        'asset_ch_dir': "ch",
+        'asset_bg_dir': "bg",
+        'asset_prop_dir': "prop",
+        'scene_root_dir': "scenes",
+        'ren_dir': "ren",
+        'cache_dir': "cache",
         'publish_dir': "pub",
     },
     'ARBOBION': {
         'drive': "A:/",
         'prefix': "ab",
-        'cache_dir': "ren/cache",
+        'asset_base': "A:/assets",
+        'scene_base': "A:/",
+        'project_json_base': "A:/",
+        'output_base': "A:/",
+        'asset_ch_dir': "ch",
+        'asset_bg_dir': "bg",
+        'asset_prop_dir': "prop",
+        'scene_root_dir': "scenes",
+        'ren_dir': "ren",
+        'cache_dir': "cache",
         'publish_dir': "pub",
     },
     'DSC': {
         'drive': "S:/",
         'prefix': "DSC",
-        'cache_dir': "ren/cache",
+        'asset_base': "S:/assets",
+        'scene_base': "S:/",
+        'project_json_base': "S:/",
+        'output_base': "S:/",
+        'asset_ch_dir': "ch",
+        'asset_bg_dir': "bg",
+        'asset_prop_dir': "prop",
+        'scene_root_dir': "scenes",
+        'ren_dir': "ren",
+        'cache_dir': "cache",
         'publish_dir': "pub",
     },
     'BTS': {
         'drive': "B:/",
         'prefix': "BTS",
-        'cache_dir': "ren/cache",
+        'asset_base': "B:/assets",
+        'scene_base': "B:/",
+        'project_json_base': "B:/",
+        'output_base': "B:/",
+        'asset_ch_dir': "ch",
+        'asset_bg_dir': "bg",
+        'asset_prop_dir': "prop",
+        'scene_root_dir': "scenes",
+        'ren_dir': "ren",
+        'cache_dir': "cache",
         'publish_dir': "pub",
     },
     'FUZZ': {
         'drive': "Z:/",
         'prefix': "FUZZ",
-        'cache_dir': "ren/cache",
+        'asset_base': "Z:/assets",
+        'scene_base': "Z:/",
+        'project_json_base': "Z:/",
+        'output_base': "Z:/",
+        'asset_ch_dir': "ch",
+        'asset_bg_dir': "bg",
+        'asset_prop_dir': "prop",
+        'scene_root_dir': "scenes",
+        'ren_dir': "ren",
+        'cache_dir': "cache",
         'publish_dir': "pub",
     },
+    'COC': {
+        'drive': "S:/PROJECT/COC/02_Production",
+        'prefix': "COC",
+        'asset_base': "S:/PROJECT/COC/02_Production",
+        'scene_base': "S:/PROJECT/COC/02_Production",
+        'project_json_base': "C:/_json",
+        'output_base': "S:/PROJECT/COC/02_Production/output",
+        'cache_base': "S:/PROJECT/COC/02_Production/Rendering",
+        'asset_ch_dir': "CHSetup/controller",
+        'asset_bg_dir': "bg",
+        'asset_prop_dir': "prop",
+        'scene_root_dir': "Animation/Detail",
+        'ren_dir': "maya",
+        'cache_dir': "cache",
+        'publish_dir': "pub",
+        'scene_identifier_mode': "filename",
+        'geometry_root_hint': "Geometry/{asset_name}",
+    },
 }
+
+PROJECT_CONFIG = deepcopy(DEFAULT_PROJECT_CONFIG)
+PROJECT_SCHEMA = {"version": 2, "projects": {}}
+PROJECT_OVERRIDES = {"version": 1, "projects": {}}
+PROJECT_CONFIG_LOADED = False
+PROJECT_SCHEMA_LOADED = False
+PROJECT_OVERRIDES_LOADED = False
+DEFAULT_SCENE_WORK_DIRS = ("ren", "cfx", "fx")
+MAX_BROWSER_LEVELS = 5
 
 PROJECT_NAME_ALIASES = {
     'THE_TRAP': 'THE_TRAP',
@@ -70,10 +178,1242 @@ PROJECT_NAME_ALIASES = {
     'DSC': 'DSC',
     'BTS': 'BTS',
     'FUZZ': 'FUZZ',
+    'COC': 'COC',
 }
+
+
+def normalize_path(path):
+    return os.path.normcase(os.path.abspath(path or ""))
+
+
+def normalize_project_name(project_name):
+    raw_name = str(project_name or "").strip()
+    if not raw_name:
+        return ""
+    return PROJECT_NAME_ALIASES.get(raw_name.upper(), raw_name.upper())
+
+
+def get_project_enum_items(self=None, context=None):
+    ensure_project_config_loaded()
+    items = []
+    for idx, project_name in enumerate(sorted(PROJECT_CONFIG.keys())):
+        config = PROJECT_CONFIG.get(project_name, {})
+        drive = str(config.get("drive", "") or "")
+        label = project_name
+        description = f"Project at {drive}" if drive else f"Project {project_name}"
+        items.append((project_name, label, description, idx))
+    return items or [('BTS', "BTS", "Fallback project", 0)]
+
+PROJECT_CONFIG_FIELDS = (
+    "drive",
+    "prefix",
+    "asset_base",
+    "scene_base",
+    "project_json_base",
+    "output_base",
+    "asset_ch_dir",
+    "asset_bg_dir",
+    "asset_prop_dir",
+    "scene_root_dir",
+    "ren_dir",
+    "cache_dir",
+    "cache_base",
+    "publish_dir",
+    "scene_example_file",
+    "publish_example_file",
+    "scene_structure_mode",
+    "scene_identifier_mode",
+    "scene_version_digits",
+    "publish_version_digits",
+    "publish_suffix",
+    "geometry_root_hint",
+)
+
+
+def is_hwang_dev_environment():
+    return os.environ.get("USERNAME", "").strip().lower() == "hwang"
+
+
+def get_local_project_settings_source_dir():
+    return HWANG_LOCAL_PROJECT_SETTINGS_SOURCE_DIR
+
+
+def get_runtime_project_settings_dir():
+    return HWANG_RUNTIME_PROJECT_SETTINGS_DIR
+
+
+def get_active_project_settings_dir():
+    if is_hwang_dev_environment():
+        runtime_dir = get_runtime_project_settings_dir()
+        if os.path.isdir(runtime_dir):
+            return runtime_dir
+
+        local_source_dir = get_local_project_settings_source_dir()
+        if os.path.isdir(local_source_dir):
+            return local_source_dir
+
+    return PROJECT_SETTINGS_DIR
+
+
+def build_default_project_schema_entry(project_name, config=None):
+    normalized_name = normalize_project_name(project_name)
+    config = normalize_project_config_entry(normalized_name, config or DEFAULT_PROJECT_CONFIG.get(normalized_name, {}))
+    scene_root_path = os.path.join(
+        str(config.get("scene_base", "") or ""),
+        str(config.get("scene_root_dir", "scenes") or "scenes"),
+    ).replace("\\", "/")
+    output_root = str(config.get("output_base", "") or "")
+    project_json_root = str(config.get("project_json_base", "") or "")
+    prefix = str(config.get("prefix", "") or "")
+
+    return {
+        "project_id": normalized_name,
+        "project_prefix": prefix,
+        "paths": {
+            "project_root": str(config.get("drive", "") or ""),
+            "project_json_root": project_json_root,
+            "output_root": output_root,
+            "render_preset_json": os.path.join(project_json_root, "_json", "renderPreset.json").replace("\\", "/"),
+            "render_setting_json": os.path.join(project_json_root, "_json", "renderSetting.json").replace("\\", "/"),
+        },
+        "scene_browser": {
+            "levels": [
+                {
+                    "id": "scene",
+                    "label": "Scene",
+                    "root_path": scene_root_path,
+                    "path_mode": "children",
+                },
+                {
+                    "id": "cut",
+                    "label": "Cut",
+                    "parent_level": "scene",
+                    "path_mode": "children",
+                },
+                {
+                    "id": "work",
+                    "label": "Work",
+                    "parent_level": "cut",
+                    "fixed_options": list(get_scene_work_dir_names_from_config(config)),
+                    "default": str(config.get("ren_dir", "ren") or "ren"),
+                },
+            ],
+            "file_level_id": "work",
+            "file_extensions": [".blend"],
+        },
+        "scene_structure": {
+            "identifier_source": "folder_depth",
+            "scene_level_id": "scene",
+            "cut_level_id": "cut",
+            "work_level_id": "work",
+            "cache_path_mode": "relative_to_work",
+            "cache_relative_path": str(config.get("cache_dir", "cache") or "cache"),
+        },
+        "assets": {
+            "categories": [
+                {
+                    "id": "ch",
+                    "label": "Character",
+                    "root_path": os.path.join(str(config.get("asset_base", "") or ""), str(config.get("asset_ch_dir", "ch") or "ch")).replace("\\", "/"),
+                    "publish_file_mode": "asset_mod_blend",
+                    "publish_file_template": "{root}/{asset_name}/mod/{asset_name}.blend",
+                    "asset_id_source": "folder_name",
+                    "geometry_root_hint": str(config.get("geometry_root_hint", "geo") or "geo"),
+                },
+                {
+                    "id": "bg",
+                    "label": "Background",
+                    "root_path": os.path.join(str(config.get("asset_base", "") or ""), str(config.get("asset_bg_dir", "bg") or "bg")).replace("\\", "/"),
+                    "publish_file_mode": "asset_mod_blend",
+                    "publish_file_template": "{root}/{asset_name}/mod/{asset_name}.blend",
+                    "asset_id_source": "folder_name",
+                    "geometry_root_hint": str(config.get("geometry_root_hint", "geo") or "geo"),
+                },
+                {
+                    "id": "prop",
+                    "label": "Prop",
+                    "root_path": os.path.join(str(config.get("asset_base", "") or ""), str(config.get("asset_prop_dir", "prop") or "prop")).replace("\\", "/"),
+                    "publish_file_mode": "asset_mod_blend",
+                    "publish_file_template": "{root}/{asset_name}/mod/{asset_name}.blend",
+                    "asset_id_source": "folder_name",
+                    "geometry_root_hint": str(config.get("geometry_root_hint", "geo") or "geo"),
+                },
+            ],
+            "asset_id_rules": {
+                "normalize_case": "lower",
+                "replace_spaces_with": "_",
+                "strip_tokens": ["rig", "mod", "pub", "fin", "final"],
+                "strip_numeric_suffix": True,
+            },
+        },
+        "cache": {
+            "root_mode": "relative_to_work",
+            "root_template": "{work_path}/" + str(config.get("cache_dir", "cache") or "cache"),
+            "file_template": "{project_prefix}_{scene}_{cut}_{category}_{asset_id}.usd",
+            "match_mode": "by_asset_id_and_category",
+            "extensions": [".usd"],
+        },
+        "output": {
+            "root_template": os.path.join(output_root, "output", str(config.get("ren_dir", "ren") or "ren"), "{scene}", "{scene}_{cut}").replace("\\", "/"),
+            "version_folder_mode": "v###",
+            "default_version_digits": 3,
+            "file_slot_prefix_template": "{scene}_{cut}_{layer}_",
+        },
+        "browser_sync": {
+            "filepath_parse_mode": "folder_first_then_filename",
+            "filename_patterns": [
+                "{project_prefix}_{scene}_{cut}_{work}_v{version}",
+                "{project_prefix}_{scene}_{cut}_{work}_v{version}_{suffix}",
+            ],
+        },
+    }
+
+
+def build_default_project_override_entry():
+    return {
+        "asset_registry": [],
+        "cache_overrides": [],
+    }
+
+
+def get_project_settings_store_path():
+    return os.path.join(get_active_project_settings_dir(), PROJECT_SETTINGS_FILENAME)
+
+
+def get_project_schema_store_path():
+    return os.path.join(get_active_project_settings_dir(), PROJECT_SCHEMA_FILENAME)
+
+
+def get_project_override_store_path():
+    return os.path.join(get_active_project_settings_dir(), PROJECT_OVERRIDE_FILENAME)
+
+
+def normalize_project_config_entry(project_name, raw_config=None):
+    base_config = deepcopy(DEFAULT_PROJECT_CONFIG.get(project_name, DEFAULT_PROJECT_CONFIG['BTS']))
+    if isinstance(raw_config, dict):
+        for key in PROJECT_CONFIG_FIELDS:
+            value = raw_config.get(key)
+            if value not in (None, ""):
+                base_config[key] = str(value)
+    return base_config
+
+
+def get_scene_work_dir_names_from_config(config):
+    configured_ren = str((config or {}).get("ren_dir", "ren") or "ren")
+    work_dirs = [configured_ren]
+    for name in DEFAULT_SCENE_WORK_DIRS:
+        if name not in work_dirs:
+            work_dirs.append(name)
+    return work_dirs
+
+
+def ensure_project_schema_loaded(force=False):
+    global PROJECT_SCHEMA, PROJECT_SCHEMA_LOADED
+    schema_path = get_project_schema_store_path()
+    if PROJECT_SCHEMA_LOADED and not force and os.path.exists(schema_path):
+        return PROJECT_SCHEMA
+
+    schema_projects = {}
+    try:
+        if os.path.exists(schema_path):
+            with open(schema_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                schema_projects = payload.get("projects", {}) if isinstance(payload.get("projects", {}), dict) else {}
+    except Exception as e:
+        print(f"[ProjectSchema][WARN] load failed: {e}")
+
+    for project_name in sorted(ensure_project_config_loaded().keys()):
+        normalized_name = normalize_project_name(project_name)
+        if normalized_name not in schema_projects:
+            schema_projects[normalized_name] = build_default_project_schema_entry(normalized_name, PROJECT_CONFIG.get(normalized_name, {}))
+
+    PROJECT_SCHEMA = {
+        "version": 2,
+        "projects": schema_projects,
+    }
+    PROJECT_SCHEMA_LOADED = True
+    if not os.path.exists(schema_path):
+        save_project_schema_store()
+    return PROJECT_SCHEMA
+
+
+def ensure_project_overrides_loaded(force=False):
+    global PROJECT_OVERRIDES, PROJECT_OVERRIDES_LOADED
+    override_path = get_project_override_store_path()
+    if PROJECT_OVERRIDES_LOADED and not force and os.path.exists(override_path):
+        return PROJECT_OVERRIDES
+
+    override_projects = {}
+    try:
+        if os.path.exists(override_path):
+            with open(override_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                override_projects = payload.get("projects", {}) if isinstance(payload.get("projects", {}), dict) else {}
+    except Exception as e:
+        print(f"[ProjectOverrides][WARN] load failed: {e}")
+
+    for project_name in sorted(ensure_project_config_loaded().keys()):
+        normalized_name = normalize_project_name(project_name)
+        override_projects.setdefault(normalized_name, build_default_project_override_entry())
+
+    PROJECT_OVERRIDES = {
+        "version": 1,
+        "projects": override_projects,
+    }
+    PROJECT_OVERRIDES_LOADED = True
+    if not os.path.exists(override_path):
+        save_project_override_store()
+    return PROJECT_OVERRIDES
+
+
+def save_project_schema_store():
+    schema_path = get_project_schema_store_path()
+    os.makedirs(os.path.dirname(schema_path), exist_ok=True)
+    with open(schema_path, "w", encoding="utf-8") as handle:
+        json.dump(PROJECT_SCHEMA, handle, ensure_ascii=False, indent=2)
+
+
+def save_project_override_store():
+    override_path = get_project_override_store_path()
+    os.makedirs(os.path.dirname(override_path), exist_ok=True)
+    with open(override_path, "w", encoding="utf-8") as handle:
+        json.dump(PROJECT_OVERRIDES, handle, ensure_ascii=False, indent=2)
+
+
+def get_project_schema_entry(project_name=None):
+    ensure_project_schema_loaded()
+    normalized = get_current_project_name() if project_name is None else normalize_project_name(project_name)
+    return deepcopy(PROJECT_SCHEMA.get("projects", {}).get(normalized, build_default_project_schema_entry(normalized, get_config_by_project_name(normalized))))
+
+
+def set_project_schema_entry(project_name, schema_entry):
+    ensure_project_schema_loaded()
+    normalized = normalize_project_name(project_name)
+    PROJECT_SCHEMA.setdefault("projects", {})[normalized] = deepcopy(schema_entry or build_default_project_schema_entry(normalized, get_config_by_project_name(normalized)))
+
+
+def get_project_override_entry(project_name=None):
+    ensure_project_overrides_loaded()
+    normalized = get_current_project_name() if project_name is None else normalize_project_name(project_name)
+    return deepcopy(PROJECT_OVERRIDES.get("projects", {}).get(normalized, build_default_project_override_entry()))
+
+
+def get_schema_scene_levels(project_name=None):
+    schema = get_project_schema_entry(project_name)
+    scene_browser = schema.get("scene_browser", {}) if isinstance(schema, dict) else {}
+    levels = scene_browser.get("levels", []) if isinstance(scene_browser, dict) else []
+    return levels if isinstance(levels, list) else []
+
+
+def get_schema_asset_categories(project_name=None):
+    schema = get_project_schema_entry(project_name)
+    assets = schema.get("assets", {}) if isinstance(schema, dict) else {}
+    categories = assets.get("categories", []) if isinstance(assets, dict) else []
+    return categories if isinstance(categories, list) else []
+
+
+def get_schema_scene_root_path(project_name=None):
+    levels = get_schema_scene_levels(project_name)
+    if levels:
+        root_path = normalize_directory_choice(levels[0].get("root_path", ""))
+        if root_path:
+            return root_path
+    return ""
+
+
+def get_schema_work_level(project_name=None):
+    levels = get_schema_scene_levels(project_name)
+    for level in levels:
+        fixed_options = level.get("fixed_options")
+        if isinstance(fixed_options, list) and fixed_options:
+            return level
+    return {}
+
+
+def get_schema_work_dir_names(project_name=None):
+    work_level = get_schema_work_level(project_name)
+    fixed_options = work_level.get("fixed_options", [])
+    if isinstance(fixed_options, list) and fixed_options:
+        return [str(option) for option in fixed_options if str(option or "").strip() or str(option) == "."]
+    return []
+
+
+def get_project_browser_file_extensions(project_name=None):
+    schema = get_project_schema_entry(project_name)
+    scene_browser = schema.get("scene_browser", {}) if isinstance(schema, dict) else {}
+    extensions = scene_browser.get("file_extensions", []) if isinstance(scene_browser, dict) else []
+    cleaned = []
+    for ext in extensions if isinstance(extensions, list) else []:
+        text = str(ext or "").strip().lower()
+        if not text:
+            continue
+        if not text.startswith("."):
+            text = "." + text
+        cleaned.append(text)
+    return cleaned or [".blend"]
+
+
+def get_schema_non_work_levels(project_name=None):
+    levels = get_schema_scene_levels(project_name)
+    work_level = get_schema_work_level(project_name)
+    work_level_id = str(work_level.get("id", "") or "")
+    results = []
+    for level in levels:
+        level_id = str(level.get("id", "") or "")
+        if work_level_id and level_id == work_level_id:
+            continue
+        results.append(level)
+    return results
+
+
+def get_schema_primary_level(project_name=None):
+    levels = get_schema_non_work_levels(project_name)
+    return levels[0] if levels else {}
+
+
+def get_schema_secondary_level(project_name=None):
+    levels = get_schema_non_work_levels(project_name)
+    return levels[1] if len(levels) >= 2 else {}
+
+
+def get_browser_scene_label(project_name=None):
+    level = get_schema_primary_level(project_name)
+    return str(level.get("label", "Scene") or "Scene")
+
+
+def get_browser_cut_label(project_name=None):
+    level = get_schema_secondary_level(project_name)
+    return str(level.get("label", "Cut") or "Cut")
+
+
+def get_browser_non_work_levels(project_name=None):
+    return get_schema_non_work_levels(project_name)[:MAX_BROWSER_LEVELS]
+
+
+def get_browser_level_definition(level_index, project_name=None):
+    levels = get_browser_non_work_levels(project_name)
+    if 1 <= level_index <= len(levels):
+        return levels[level_index - 1]
+    return {}
+
+
+def get_browser_level_label(level_index, project_name=None):
+    default_labels = {
+        1: "Scene",
+        2: "Cut",
+        3: "Level 3",
+        4: "Level 4",
+        5: "Level 5",
+    }
+    level = get_browser_level_definition(level_index, project_name)
+    return str(level.get("label", default_labels.get(level_index, f"Level {level_index}")) or default_labels.get(level_index, f"Level {level_index}"))
+
+
+def get_browser_level_attr_name(level_index):
+    if level_index == 1:
+        return "scene_number"
+    if level_index == 2:
+        return "cut_number"
+    return f"browser_level_{level_index}"
+
+
+def get_browser_level_value(context=None, level_index=1):
+    context = bpy.context if context is None else context
+    my_tool = getattr(getattr(context, "scene", None), "my_tool", None)
+    if not my_tool:
+        return ""
+    return str(getattr(my_tool, get_browser_level_attr_name(level_index), "") or "")
+
+
+def get_safe_enum_identifier(items, preferred_value="", fallback_identifier="NONE"):
+    valid_values = [str(item[0]) for item in (items or []) if item]
+    preferred_value = str(preferred_value or "")
+    if preferred_value and preferred_value in valid_values:
+        return preferred_value
+    if valid_values:
+        return valid_values[0]
+    return fallback_identifier
+
+
+def safe_set_enum_property(target, attr_name, items, preferred_value="", fallback_identifier="NONE"):
+    if target is None or not hasattr(target, attr_name):
+        return ""
+    value = get_safe_enum_identifier(items, preferred_value=preferred_value, fallback_identifier=fallback_identifier)
+    try:
+        setattr(target, attr_name, value)
+        return value
+    except Exception:
+        return ""
+
+
+def set_browser_level_value(context, level_index, value):
+    my_tool = getattr(getattr(context, "scene", None), "my_tool", None)
+    if not my_tool:
+        return
+    attr_name = get_browser_level_attr_name(level_index)
+    level_items = get_browser_level_items(level_index, context)
+    safe_set_enum_property(my_tool, attr_name, level_items, preferred_value=value, fallback_identifier=f"NO_LEVEL{level_index}")
+
+
+def get_browser_level_values(context=None, project_name=None):
+    values = []
+    levels = get_browser_non_work_levels(project_name)
+    for index in range(1, len(levels) + 1):
+        values.append(get_browser_level_value(context, index))
+    return values
+
+
+def build_browser_level_base_path(level_index, context=None, project_name=None):
+    scene_root = get_scene_root_path(project_name)
+    if level_index <= 1:
+        return scene_root
+
+    values = get_browser_level_values(context, project_name)
+    parts = [value for value in values[:max(0, level_index - 1)] if str(value or "").strip()]
+    return os.path.join(scene_root, *parts) if parts else scene_root
+
+
+def build_browser_base_path(scene_number="", cut_number="", project_name=None):
+    scene_root = get_scene_root_path(project_name)
+    parts = []
+    levels = get_browser_non_work_levels(project_name)
+    for index in range(1, len(levels) + 1):
+        if index == 1:
+            value = str(scene_number or "").strip()
+        elif index == 2:
+            value = str(cut_number or "").strip()
+        else:
+            value = str(get_browser_level_value(bpy.context, index) or "").strip()
+        if value:
+            parts.append(value)
+    return os.path.join(scene_root, *parts) if parts else scene_root
+
+
+def list_browser_child_dirs(base_path):
+    items = []
+    if not os.path.exists(base_path):
+        return items
+    for name in sorted(os.listdir(base_path)):
+        full_path = os.path.join(base_path, name)
+        if os.path.isdir(full_path) and is_valid_folder(name):
+            items.append((name, name, ""))
+    return items
+
+
+def get_browser_level_items(level_index, context=None, project_name=None):
+    level = get_browser_level_definition(level_index, project_name)
+    if not level:
+        return []
+
+    base_path = build_browser_level_base_path(level_index, context, project_name)
+    return list_browser_child_dirs(base_path)
+
+
+def build_schema_non_work_levels(scene_root_path, level_count, labels):
+    levels = []
+    safe_count = max(1, min(MAX_BROWSER_LEVELS, int(level_count or 1)))
+    for index in range(1, safe_count + 1):
+        label = str((labels or {}).get(index, "") or get_browser_level_label(index)).strip() or f"Level {index}"
+        if index == 1:
+            levels.append({
+                "id": "scene",
+                "label": label,
+                "root_path": normalize_directory_choice(scene_root_path),
+                "path_mode": "children",
+            })
+        else:
+            levels.append({
+                "id": "cut" if index == 2 else f"level_{index}",
+                "label": label,
+                "parent_level": levels[index - 2]["id"],
+                "path_mode": "children",
+            })
+    return levels
+
+
+def upsert_schema_from_project_config(project_name, config=None):
+    normalized_name = normalize_project_name(project_name)
+    config = normalize_project_config_entry(normalized_name, config or get_config_by_project_name(normalized_name))
+    set_project_schema_entry(normalized_name, build_default_project_schema_entry(normalized_name, config))
+
+    ensure_project_overrides_loaded()
+    PROJECT_OVERRIDES.setdefault("projects", {})
+    PROJECT_OVERRIDES["projects"].setdefault(normalized_name, build_default_project_override_entry())
+
+
+def ensure_project_config_loaded(force=False):
+    global PROJECT_CONFIG, PROJECT_CONFIG_LOADED
+    settings_path = get_project_settings_store_path()
+
+    if PROJECT_CONFIG_LOADED and not force and os.path.exists(settings_path):
+        return PROJECT_CONFIG
+
+    PROJECT_CONFIG = deepcopy(DEFAULT_PROJECT_CONFIG)
+
+    if PIPELINE_SHARED_AVAILABLE and load_pipeline_config and build_legacy_rrrender_project_entry:
+        try:
+            payload = load_pipeline_config()
+            for project_name in get_pipeline_project_names(payload):
+                normalized_name = normalize_project_name(project_name)
+                raw_config = build_legacy_rrrender_project_entry(project_name, payload)
+                if normalized_name and raw_config:
+                    PROJECT_CONFIG[normalized_name] = normalize_project_config_entry(normalized_name, raw_config)
+            PROJECT_CONFIG_LOADED = True
+            return PROJECT_CONFIG
+        except Exception as e:
+            print(f"[ProjectConfig][WARN] shared pipeline load failed, fallback to legacy JSON: {e}")
+
+    try:
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                projects = payload.get("projects", payload)
+                if isinstance(projects, dict):
+                    for project_name, raw_config in projects.items():
+                        normalized_name = normalize_project_name(project_name)
+                        if normalized_name:
+                            PROJECT_CONFIG[normalized_name] = normalize_project_config_entry(normalized_name, raw_config)
+        else:
+            save_project_config_store()
+    except Exception as e:
+        print(f"[ProjectConfig][WARN] load failed: {e}")
+
+    PROJECT_CONFIG_LOADED = True
+    return PROJECT_CONFIG
+
+
+def save_project_config_store():
+    settings_path = get_project_settings_store_path()
+    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
+    payload = {
+        "version": 1,
+        "projects": {name: normalize_project_config_entry(name, PROJECT_CONFIG.get(name, {})) for name in sorted(PROJECT_CONFIG.keys())}
+    }
+    with open(settings_path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+
+
+def get_project_config_value(project_name, key, default=""):
+    ensure_project_config_loaded()
+    config = get_config_by_project_name(project_name)
+    return str(config.get(key, default) or default)
+
+
+def get_project_drive(project_name=None):
+    return get_project_config_value(project_name, "drive", DEFAULT_PROJECT_CONFIG['BTS']['drive'])
+
+
+def get_project_scene_base(project_name=None):
+    scene_root_path = get_schema_scene_root_path(project_name)
+    if scene_root_path:
+        drive, parts = split_normalized_path(scene_root_path)
+        if len(parts) >= 1:
+            return join_normalized_path(drive, parts[:-1]) if parts[:-1] else (drive or scene_root_path)
+    return get_project_config_value(project_name, "scene_base", get_project_drive(project_name))
+
+
+def get_project_asset_base(project_name=None):
+    categories = get_schema_asset_categories(project_name)
+    if categories:
+        root_path = normalize_directory_choice(categories[0].get("root_path", ""))
+        if root_path:
+            drive, parts = split_normalized_path(root_path)
+            if len(parts) >= 2:
+                return join_normalized_path(drive, parts[:-1])
+    return get_project_config_value(project_name, "asset_base", os.path.join(get_project_drive(project_name), "assets"))
+
+
+def get_project_json_base(project_name=None):
+    schema = get_project_schema_entry(project_name)
+    paths = schema.get("paths", {}) if isinstance(schema, dict) else {}
+    project_json_root = normalize_directory_choice(paths.get("project_json_root", ""))
+    if project_json_root:
+        return project_json_root
+    return get_project_config_value(project_name, "project_json_base", get_project_drive(project_name))
+
+
+def get_project_output_base(project_name=None):
+    schema = get_project_schema_entry(project_name)
+    paths = schema.get("paths", {}) if isinstance(schema, dict) else {}
+    output_root = normalize_directory_choice(paths.get("output_root", ""))
+    if output_root:
+        return output_root
+    return get_project_config_value(project_name, "output_base", get_project_drive(project_name))
+
+
+def get_project_scene_root_dir(project_name=None):
+    scene_root_path = get_schema_scene_root_path(project_name)
+    if scene_root_path:
+        _drive, parts = split_normalized_path(scene_root_path)
+        if parts:
+            return parts[-1]
+    return get_project_config_value(project_name, "scene_root_dir", "scenes")
+
+
+def get_project_ren_dir_name(project_name=None):
+    work_dirs = get_schema_work_dir_names(project_name)
+    if work_dirs:
+        return work_dirs[0]
+    return get_project_config_value(project_name, "ren_dir", "ren")
+
+
+def get_project_cache_dir_name(project_name=None):
+    return get_project_config_value(project_name, "cache_dir", "cache")
+
+
+def get_project_publish_dir_name(project_name=None):
+    return get_project_config_value(project_name, "publish_dir", "pub")
+
+
+def get_asset_category_dir_name(category_name, project_name=None):
+    category_id = str(category_name or "").lower()
+    for category in get_schema_asset_categories(project_name):
+        if str(category.get("id", "")).lower() == category_id:
+            root_path = normalize_directory_choice(category.get("root_path", ""))
+            if root_path:
+                _drive, parts = split_normalized_path(root_path)
+                if parts:
+                    return "/".join(parts[-1:])
+    mapping = {
+        "ch": "asset_ch_dir",
+        "bg": "asset_bg_dir",
+        "prop": "asset_prop_dir",
+    }
+    category_key = str(category_name or "").lower()
+    field_name = mapping.get(category_key)
+    if not field_name:
+        return str(category_name)
+    return get_project_config_value(project_name, field_name, category_key)
+
+
+def get_scene_root_path(project_name=None):
+    scene_root_path = get_schema_scene_root_path(project_name)
+    if scene_root_path:
+        return scene_root_path
+    return os.path.join(get_project_scene_base(project_name), get_project_scene_root_dir(project_name))
+
+
+def get_scene_path(scene_number, project_name=None):
+    return os.path.join(get_scene_root_path(project_name), str(scene_number))
+
+
+def get_cut_path(scene_number, cut_number, project_name=None):
+    return build_browser_base_path(scene_number, cut_number, project_name)
+
+
+def get_ren_path(scene_number, cut_number, project_name=None):
+    return os.path.join(build_browser_base_path(scene_number, cut_number, project_name), get_project_ren_dir_name(project_name))
+
+
+def get_cache_path(scene_number, cut_number, project_name=None):
+    return os.path.join(get_ren_path(scene_number, cut_number, project_name), get_project_cache_dir_name(project_name))
+
+
+def get_scene_identifier_mode(project_name=None):
+    config = get_config_by_project_name(project_name)
+    return str(config.get("scene_identifier_mode", "") or "").strip().lower()
+
+
+def resolve_scene_source_filepath(scene_number, cut_number, context=None, project_name=None):
+    context = bpy.context if context is None else context
+    current_filepath = str((_pending_browser_focus_filepath or bpy.data.filepath) or "")
+    if current_filepath:
+        return current_filepath
+    my_tool = getattr(getattr(context, "scene", None), "my_tool", None)
+    if not my_tool:
+        return ""
+    blend_file_value = str(getattr(my_tool, "blend_file", "") or "")
+    if not blend_file_value or blend_file_value.startswith("NO_"):
+        return ""
+    return resolve_selected_blend_filepath(scene_number, cut_number, blend_file_value, project_name) or ""
+
+
+def resolve_cache_context(scene_number, cut_number, context=None, project_name=None):
+    project_name = get_current_project_name() if project_name is None else normalize_project_name(project_name)
+    cache_dir = get_cache_path(scene_number, cut_number, project_name)
+    scene_token = str(scene_number or "")
+    cut_token = str(cut_number or "")
+    source_file = resolve_scene_source_filepath(scene_number, cut_number, context, project_name)
+
+    if source_file:
+        scene_info = infer_scene_filename_info(source_file)
+        source_dir = os.path.dirname(source_file)
+        if source_dir:
+            # Always prefer the currently opened scene's sibling cache folder when available.
+            # This keeps legacy ren/cache projects and COC's cut/cache layout both aligned
+            # with the actual file the user is working in.
+            cache_dir = os.path.join(source_dir, get_project_cache_dir_name(project_name))
+
+            if get_scene_identifier_mode(project_name) == "filename":
+                config = get_config_by_project_name(project_name)
+                cache_base = normalize_directory_choice(config.get("cache_base", ""))
+                if cache_base and not os.path.exists(cache_dir):
+                    episode_name = os.path.basename(os.path.dirname(source_dir))
+                    shot_name = "_".join([token for token in (scene_info.get("scene_token", ""), scene_info.get("cut_token", "")) if str(token).strip()])
+                    if episode_name and shot_name:
+                        cache_dir = os.path.join(cache_base, episode_name, shot_name, get_project_cache_dir_name(project_name))
+        scene_token = str(scene_info.get("scene_token", scene_token) or scene_token)
+        cut_token = str(scene_info.get("cut_token", cut_token) or cut_token)
+
+    return {
+        "cache_dir": cache_dir,
+        "scene_token": scene_token,
+        "cut_token": cut_token,
+        "source_file": source_file,
+    }
+
+
+def safe_usd_import(**usd_args):
+    args = dict(usd_args)
+    optional_keys = [
+        "import_subdiv",
+        "import_meshes",
+        "import_materials",
+        "import_usd_preview",
+        "import_all_materials",
+        "read_mesh_uvs",
+        "read_mesh_colors",
+        "apply_unit_conversion_scale",
+        "set_frame_range",
+        "relative_path",
+        "scale",
+    ]
+
+    while True:
+        try:
+            return bpy.ops.wm.usd_import(**args)
+        except TypeError as e:
+            message = str(e)
+            removed = False
+            for key in list(optional_keys):
+                if f'keyword "{key}" unrecognized' in message and key in args:
+                    args.pop(key, None)
+                    removed = True
+                    print(f"[USD Import] Removed unsupported arg: {key}")
+                    break
+            if not removed:
+                raise
+
+
+def get_scene_work_dir_names(project_name=None):
+    schema_work_dirs = get_schema_work_dir_names(project_name)
+    if schema_work_dirs:
+        return schema_work_dirs
+    return get_scene_work_dir_names_from_config(get_config_by_project_name(project_name))
+
+
+def get_scene_work_paths(scene_number, cut_number, project_name=None):
+    base_path = build_browser_base_path(scene_number, cut_number, project_name)
+    paths = []
+    for work_dir in get_scene_work_dir_names(project_name):
+        work_dir_text = str(work_dir or "")
+        if work_dir_text in (".", "./", "\\"):
+            paths.append((work_dir_text, base_path))
+        else:
+            paths.append((work_dir_text, os.path.join(base_path, work_dir_text)))
+    return paths
+
+
+def build_blend_file_identifier(work_dir_name, filename):
+    return f"{work_dir_name}|{filename}"
+
+
+def parse_blend_file_identifier(value):
+    text = str(value or "")
+    if "|" in text:
+        work_dir_name, filename = text.split("|", 1)
+        return work_dir_name, filename
+    return "", text
+
+
+def resolve_selected_blend_filepath(scene_number, cut_number, blend_file_value, project_name=None):
+    work_dir_name, filename = parse_blend_file_identifier(blend_file_value)
+    if work_dir_name and filename:
+        base_path = build_browser_base_path(scene_number, cut_number, project_name)
+        if str(work_dir_name or "") in (".", "./", "\\"):
+            candidate = os.path.join(base_path, filename)
+        else:
+            candidate = os.path.join(base_path, work_dir_name, filename)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def normalize_directory_choice(directory):
+    normalized = str(directory or "").replace("\\", "/").strip()
+    if len(normalized) == 2 and normalized[1] == ":":
+        normalized += "/"
+    return normalized
+
+
+def split_normalized_path(path):
+    normalized = normalize_directory_choice(path)
+    if not normalized:
+        return "", []
+
+    match = re.match(r"^([A-Za-z]:)(?:/(.*))?$", normalized)
+    if match:
+        drive = match.group(1) + "/"
+        remainder = match.group(2) or ""
+        parts = [part for part in remainder.split("/") if part]
+        return drive, parts
+
+    return "", [part for part in normalized.split("/") if part]
+
+
+def join_normalized_path(drive, parts):
+    clean_parts = [str(part).strip("/\\") for part in (parts or []) if str(part).strip("/\\")]
+    if drive:
+        return drive.rstrip("/") + ("/" + "/".join(clean_parts) if clean_parts else "/")
+    return "/".join(clean_parts)
+
+
+def find_marker_index(parts, markers):
+    marker_lookup = {str(marker).lower() for marker in markers}
+    for index, part in enumerate(parts):
+        if str(part).lower() in marker_lookup:
+            return index
+    return None
+
+
+def guess_asset_category_from_parts(parts):
+    joined = "/".join(str(part).lower() for part in parts)
+    if any(token in joined for token in ("bg", "background", "env", "environment")):
+        return "bg"
+    if any(token in joined for token in ("prop", "props", "prp")):
+        return "prop"
+    return "ch"
+
+
+def infer_scene_filename_info(scene_file_path):
+    filename = os.path.basename(scene_file_path)
+    stem = os.path.splitext(filename)[0]
+    info = {
+        "prefix": "",
+        "scene_token": "",
+        "cut_token": "",
+        "version_digits": 0,
+        "identifier_mode": "unknown",
+    }
+
+    version_match = re.search(r"(?i)(?:^|[_\-])v(\d+)(?:$|[_\-])", stem)
+    if version_match:
+        info["version_digits"] = len(version_match.group(1))
+
+    legacy_match = re.match(r"(?i)^([A-Za-z]+)_([0-9]{4})_([0-9]{4})_([A-Za-z0-9]+)_v(\d+)", stem)
+    if legacy_match:
+        info["prefix"] = legacy_match.group(1)
+        info["scene_token"] = legacy_match.group(2)
+        info["cut_token"] = legacy_match.group(3)
+        info["version_digits"] = len(legacy_match.group(5))
+        info["identifier_mode"] = "prefix_scene_cut_work_version"
+        return info
+
+    scene_cut_match = re.match(r"(?i)^([A-Za-z]*\d+)[_\-]([A-Za-z]*\d+)(?:[_\-]v(\d+))?", stem)
+    if scene_cut_match:
+        info["scene_token"] = scene_cut_match.group(1)
+        info["cut_token"] = scene_cut_match.group(2)
+        if scene_cut_match.group(3):
+            info["version_digits"] = len(scene_cut_match.group(3))
+        info["identifier_mode"] = "scene_cut_version"
+        return info
+
+    numeric_match = re.search(r"(?<!\d)(\d{4})[_\-](\d{4})(?!\d)", stem)
+    if numeric_match:
+        info["scene_token"] = numeric_match.group(1)
+        info["cut_token"] = numeric_match.group(2)
+        info["identifier_mode"] = "scene_cut_numeric"
+
+    return info
+
+
+def infer_scene_path_config(scene_file_path):
+    directory = os.path.dirname(scene_file_path)
+    drive, parts = split_normalized_path(directory)
+    scene_info = infer_scene_filename_info(scene_file_path)
+    work_dir_name = parts[-1] if parts else "ren"
+    pre_work_parts = parts[:-1]
+    scene_token = str(scene_info.get("scene_token", "") or "")
+    cut_token = str(scene_info.get("cut_token", "") or "")
+
+    structure_mode = "flat_files"
+    scene_root_parts = []
+    scene_base_parts = []
+    scene_markers = ("scenes", "scene", "shots", "shot", "seq", "sequence", "animation", "ani", "detail")
+
+    has_scene_cut_folders = (
+        len(parts) >= 3
+        and scene_token
+        and cut_token
+        and str(parts[-3]).lower() == scene_token.lower()
+        and str(parts[-2]).lower() == cut_token.lower()
+    )
+
+    if has_scene_cut_folders:
+        structure_mode = "folder_scene_cut"
+        marker_index = find_marker_index(parts[:-3], scene_markers)
+        if marker_index is not None:
+            scene_base_parts = parts[:marker_index]
+            scene_root_parts = parts[marker_index:-3]
+        else:
+            scene_base_parts = parts[:-4] if len(parts) >= 4 else []
+            scene_root_parts = parts[-4:-3] if len(parts) >= 4 else ["scenes"]
+    else:
+        marker_index = find_marker_index(pre_work_parts, scene_markers)
+        if marker_index is not None:
+            scene_base_parts = pre_work_parts[:marker_index]
+            scene_root_parts = pre_work_parts[marker_index:]
+        else:
+            scene_base_parts = pre_work_parts[:-2] if len(pre_work_parts) >= 2 else []
+            scene_root_parts = pre_work_parts[-2:] if len(pre_work_parts) >= 2 else (pre_work_parts or ["scenes"])
+
+    scene_base = join_normalized_path(drive, scene_base_parts) if (drive or scene_base_parts) else ""
+    scene_root_dir = "/".join(scene_root_parts) if scene_root_parts else "scenes"
+
+    return {
+        "scene_base": scene_base,
+        "scene_root_dir": scene_root_dir,
+        "ren_dir": work_dir_name,
+        "scene_structure_mode": structure_mode,
+        "scene_identifier_mode": scene_info.get("identifier_mode", "unknown"),
+        "scene_version_digits": scene_info.get("version_digits", 0),
+        "inferred_prefix": scene_info.get("prefix", ""),
+    }
+
+
+def infer_publish_path_config(publish_file_path):
+    directory = os.path.dirname(publish_file_path)
+    filename = os.path.basename(publish_file_path)
+    file_stem = os.path.splitext(filename)[0]
+    drive, parts = split_normalized_path(directory)
+
+    container_names = {"mod", "pub", "rig", "blend", "model", "maya"}
+    asset_folder_index = len(parts) - 1
+    if parts and str(parts[-1]).lower() in container_names and len(parts) >= 2:
+        asset_folder_index = len(parts) - 2
+
+    asset_name = parts[asset_folder_index] if parts else ""
+    asset_base_parts = []
+    category_parts = []
+
+    assets_index = find_marker_index(parts[:asset_folder_index], ("assets", "asset"))
+    if assets_index is not None:
+        asset_base_parts = parts[:assets_index + 1]
+        category_parts = parts[assets_index + 1:asset_folder_index]
+    else:
+        asset_marker_index = find_marker_index(
+            parts[:asset_folder_index],
+            ("chsetup", "ch", "char", "character", "characters", "bg", "background", "prop", "props", "controller"),
+        )
+        if asset_marker_index is not None:
+            asset_base_parts = parts[:asset_marker_index]
+            category_parts = parts[asset_marker_index:asset_folder_index]
+        else:
+            asset_base_parts = parts[:asset_folder_index - 1] if asset_folder_index >= 2 else parts[:asset_folder_index]
+            category_parts = parts[asset_folder_index - 1:asset_folder_index] if asset_folder_index >= 1 else []
+
+    publish_suffix = ""
+    if asset_name and file_stem.lower().startswith(asset_name.lower()):
+        publish_suffix = file_stem[len(asset_name):].lstrip("_-")
+
+    version_match = re.search(r"(?i)(?:^|[_\-])v(\d+)(?:$|[_\-])", file_stem)
+
+    return {
+        "asset_base": join_normalized_path(drive, asset_base_parts) if (drive or asset_base_parts) else "",
+        "asset_category_guess": guess_asset_category_from_parts(category_parts),
+        "asset_category_path": "/".join(category_parts),
+        "publish_version_digits": len(version_match.group(1)) if version_match else 0,
+        "publish_suffix": publish_suffix,
+    }
+
+
+def infer_project_config_from_example_files(project_name, publish_file_path, scene_file_path, prefix="", geometry_root_hint="Geometry/{asset_name}"):
+    normalized_publish = normalize_directory_choice(publish_file_path)
+    normalized_scene = normalize_directory_choice(scene_file_path)
+    if not normalized_publish or not os.path.exists(normalized_publish):
+        raise ValueError("Publish file path is invalid.")
+    if not normalized_scene or not os.path.exists(normalized_scene):
+        raise ValueError("Scene file path is invalid.")
+
+    scene_config = infer_scene_path_config(normalized_scene)
+    publish_config = infer_publish_path_config(normalized_publish)
+    drive, _parts = split_normalized_path(normalized_scene)
+
+    inferred_prefix = str(prefix or "").strip() or str(scene_config.get("inferred_prefix", "") or "").strip()
+    config = normalize_project_config_entry(project_name, DEFAULT_PROJECT_CONFIG.get('BTS', {}))
+    config.update({
+        "drive": drive or config.get("drive", ""),
+        "prefix": inferred_prefix or config.get("prefix", ""),
+        "asset_base": publish_config.get("asset_base") or config.get("asset_base", ""),
+        "scene_base": scene_config.get("scene_base") or config.get("scene_base", ""),
+        "project_json_base": scene_config.get("scene_base") or drive or config.get("project_json_base", ""),
+        "output_base": scene_config.get("scene_base") or drive or config.get("output_base", ""),
+        "scene_root_dir": scene_config.get("scene_root_dir") or config.get("scene_root_dir", "scenes"),
+        "ren_dir": scene_config.get("ren_dir") or config.get("ren_dir", "ren"),
+        "cache_dir": config.get("cache_dir", "cache"),
+        "publish_dir": config.get("publish_dir", "pub"),
+        "scene_example_file": normalized_scene,
+        "publish_example_file": normalized_publish,
+        "scene_structure_mode": scene_config.get("scene_structure_mode", "unknown"),
+        "scene_identifier_mode": scene_config.get("scene_identifier_mode", "unknown"),
+        "scene_version_digits": str(scene_config.get("scene_version_digits", 0)),
+        "publish_version_digits": str(publish_config.get("publish_version_digits", 0)),
+        "publish_suffix": publish_config.get("publish_suffix", ""),
+        "geometry_root_hint": str(geometry_root_hint or "Geometry/{asset_name}"),
+    })
+
+    category_guess = publish_config.get("asset_category_guess", "ch")
+    category_path = publish_config.get("asset_category_path", "")
+    if category_path:
+        if category_guess == "bg":
+            config["asset_bg_dir"] = category_path
+        elif category_guess == "prop":
+            config["asset_prop_dir"] = category_path
+        else:
+            config["asset_ch_dir"] = category_path
+
+    report_lines = [
+        "=" * 80,
+        f"rrRender Project Wizard | Project: {project_name}",
+        f"Publish file: {normalized_publish}",
+        f"Scene file:   {normalized_scene}",
+        "-" * 80,
+        f"Drive: {config.get('drive', '')}",
+        f"Prefix: {config.get('prefix', '') or '(not inferred)'}",
+        f"Asset Base: {config.get('asset_base', '')}",
+        f"Scene Base: {config.get('scene_base', '')}",
+        f"Scene Root Dir: {config.get('scene_root_dir', '')}",
+        f"Work Dir: {config.get('ren_dir', '')}",
+        f"Asset Category Guess: {category_guess}",
+        f"Asset Category Path: {category_path or '(not inferred)'}",
+        f"Scene Structure Mode: {config.get('scene_structure_mode', '')}",
+        f"Scene Identifier Mode: {config.get('scene_identifier_mode', '')}",
+        f"Scene Version Digits: {config.get('scene_version_digits', '0')}",
+        f"Publish Version Digits: {config.get('publish_version_digits', '0')}",
+        f"Publish Suffix: {config.get('publish_suffix', '') or '(none)'}",
+        f"Geometry Root Hint: {config.get('geometry_root_hint', '')}",
+        "=" * 80,
+    ]
+
+    return config, report_lines
+
+
+def write_or_replace_text_block(text_name, lines):
+    text = bpy.data.texts.get(text_name)
+    if not text:
+        text = bpy.data.texts.new(text_name)
+    text.clear()
+    text.write("\n".join(lines))
+    return text
+
+
+def get_asset_category_path(category_name, project_name=None):
+    category_id = str(category_name or "").lower()
+    for category in get_schema_asset_categories(project_name):
+        if str(category.get("id", "")).lower() == category_id:
+            root_path = normalize_directory_choice(category.get("root_path", ""))
+            if root_path:
+                return root_path
+    return os.path.join(get_project_asset_base(project_name), get_asset_category_dir_name(category_name, project_name))
+
+
+def get_asset_blend_path(category_name, asset_name, project_name=None):
+    category_id = str(category_name or "").lower()
+    category_aliases = {
+        "ch": {"ch", "char", "character"},
+        "bg": {"bg", "background", "env", "environment"},
+        "prop": {"prop", "props"},
+    }
+    accepted_ids = category_aliases.get(category_id, {category_id})
+    for category in get_schema_asset_categories(project_name):
+        schema_category_id = str(category.get("id", "")).lower()
+        if schema_category_id not in accepted_ids:
+            continue
+        template = str(category.get("publish_file_template", "") or "").strip()
+        root_path = normalize_directory_choice(category.get("root_path", ""))
+        if template and root_path:
+            template_path = template.format(root=root_path, asset_name=asset_name, asset_id=asset_name).replace("\\", "/")
+            versioned_blend_dir = os.path.join(root_path, asset_name, "mod", "blend")
+            if os.path.isdir(versioned_blend_dir):
+                versioned_files = []
+                for file_name in os.listdir(versioned_blend_dir):
+                    if not file_name.lower().endswith(".blend"):
+                        continue
+                    match = re.search(r"v(\d+)", file_name, re.IGNORECASE)
+                    version_number = int(match.group(1)) if match else -1
+                    versioned_files.append((version_number, file_name))
+                if versioned_files:
+                    versioned_files.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                    return os.path.join(versioned_blend_dir, versioned_files[0][1]).replace("\\", "/")
+
+            direct_mod_blend = os.path.join(root_path, asset_name, "mod", f"{asset_name}.blend")
+            if os.path.exists(direct_mod_blend):
+                return direct_mod_blend.replace("\\", "/")
+
+            if os.path.exists(template_path) and template_path.lower().endswith(".blend"):
+                return template_path
+
+    category_dir = get_asset_category_dir_name(category_name, project_name)
+    return os.path.join(get_project_asset_base(project_name), category_dir, asset_name, "mod", f"{asset_name}.blend")
+
+
+def get_project_json_path(filename, project_name=None):
+    schema = get_project_schema_entry(project_name)
+    paths = schema.get("paths", {}) if isinstance(schema, dict) else {}
+    filename_key = os.path.splitext(os.path.basename(str(filename or "")))[0].lower()
+    if filename_key == "renderpreset":
+        candidate = normalize_directory_choice(paths.get("render_preset_json", ""))
+        if candidate:
+            return candidate
+    if filename_key == "rendersetting":
+        candidate = normalize_directory_choice(paths.get("render_setting_json", ""))
+        if candidate:
+            return candidate
+    return os.path.join(get_project_json_base(project_name), "_json", filename)
+
+
+def get_project_output_path(scene_number, cut_number, project_name=None):
+    schema = get_project_schema_entry(project_name)
+    output_schema = schema.get("output", {}) if isinstance(schema, dict) else {}
+    template = str(output_schema.get("root_template", "") or "").strip()
+    work_dir_name = get_project_ren_dir_name(project_name)
+    if template:
+        browser_values = get_browser_level_values(bpy.context, project_name)
+        selection_values = {
+            "scene": str(scene_number),
+            "cut": str(cut_number),
+            "work": "" if is_root_work_dir_name(work_dir_name) else work_dir_name,
+            "episode": str(scene_number),
+            "shot": str(cut_number),
+        }
+        for index, value in enumerate(browser_values, start=1):
+            selection_values[f"level_{index}"] = str(value or "")
+        level_defs = get_browser_non_work_levels(project_name)
+        for index, level_def in enumerate(level_defs, start=1):
+            level_id = str(level_def.get("id", "") or "").strip()
+            if level_id:
+                selection_values[level_id] = str(browser_values[index - 1] if index - 1 < len(browser_values) else "")
+        try:
+            return template.format(**selection_values).replace("\\", "/")
+        except Exception:
+            pass
+    output_base = get_project_output_base(project_name)
+    output_parts = [output_base]
+    if os.path.basename(output_base.rstrip("/\\")).lower() != "output":
+        output_parts.append("output")
+    if not is_root_work_dir_name(work_dir_name):
+        output_parts.append(work_dir_name)
+    output_parts.extend([str(scene_number), f"{scene_number}_{cut_number}"])
+    return os.path.join(*output_parts)
 
 _recent_browser_state_ready = False
 _recent_browser_state_suspended = False
+_browser_sync_suspended = False
+_pending_browser_focus_filepath = ""
+_pending_browser_focus_project = ""
 RECENT_BROWSER_STATE_DIR = r"C:\_json"
 RECENT_BROWSER_STATE_FILE = "rrRender_recent_browser_state.json"
 
@@ -111,6 +1451,9 @@ def save_recent_browser_state(context=None, force=False):
             "project": str(getattr(project_settings, "projects", "") or ""),
             "scene_number": str(getattr(my_tool, "scene_number", "") or ""),
             "cut_number": str(getattr(my_tool, "cut_number", "") or ""),
+            "browser_level_3": str(getattr(my_tool, "browser_level_3", "") or ""),
+            "browser_level_4": str(getattr(my_tool, "browser_level_4", "") or ""),
+            "browser_level_5": str(getattr(my_tool, "browser_level_5", "") or ""),
             "blend_file": str(getattr(my_tool, "blend_file", "") or ""),
         }
 
@@ -142,7 +1485,7 @@ def load_recent_browser_state():
 
 
 def restore_recent_browser_state():
-    global _recent_browser_state_ready, _recent_browser_state_suspended
+    global _recent_browser_state_ready, _recent_browser_state_suspended, _pending_browser_focus_filepath
     try:
         _recent_browser_state_suspended = True
         scene = bpy.context.scene
@@ -152,12 +1495,18 @@ def restore_recent_browser_state():
             _recent_browser_state_ready = True
             return None
 
+        focus_filepath = _pending_browser_focus_filepath or bpy.data.filepath
+        if focus_filepath and sync_browser_to_filepath(bpy.context, focus_filepath, save_state=True):
+            _pending_browser_focus_filepath = ""
+            _recent_browser_state_ready = True
+            return None
+
         data = load_recent_browser_state()
         if not data:
             _recent_browser_state_ready = True
             return None
 
-        project = PROJECT_NAME_ALIASES.get(str(data.get("project", "")).strip().upper(), str(data.get("project", "")).strip().upper())
+        project = normalize_project_name(data.get("project", ""))
         if project:
             valid_projects = {item.identifier for item in MyProjectSettings1.bl_rna.properties["projects"].enum_items}
             if project in valid_projects:
@@ -165,21 +1514,21 @@ def restore_recent_browser_state():
 
         scene_number = str(data.get("scene_number", "") or "")
         if scene_number:
-            valid_scenes = {item[0] for item in get_cached_scenes()}
-            if scene_number in valid_scenes:
-                my_tool.scene_number = scene_number
+            safe_set_enum_property(my_tool, "scene_number", get_cached_scenes(), preferred_value=scene_number, fallback_identifier="NO_SCENES")
 
         cut_number = str(data.get("cut_number", "") or "")
         if cut_number and scene_number:
-            valid_cuts = {item[0] for item in get_cached_cuts(scene_number)}
-            if cut_number in valid_cuts:
-                my_tool.cut_number = cut_number
+            safe_set_enum_property(my_tool, "cut_number", get_cached_cuts(scene_number), preferred_value=cut_number, fallback_identifier="NO_CUTS")
+
+        for index in range(3, MAX_BROWSER_LEVELS + 1):
+            level_value = str(data.get(f"browser_level_{index}", "") or "")
+            if not level_value:
+                continue
+            safe_set_enum_property(my_tool, f"browser_level_{index}", get_browser_level_items(index, bpy.context), preferred_value=level_value, fallback_identifier=f"NO_LEVEL{index}")
 
         blend_file = str(data.get("blend_file", "") or "")
         if blend_file and scene_number and cut_number:
-            valid_blend_files = {item[0] for item in get_blend_files(my_tool, bpy.context)}
-            if blend_file in valid_blend_files:
-                my_tool.blend_file = blend_file
+            safe_set_enum_property(my_tool, "blend_file", get_blend_files(my_tool, bpy.context), preferred_value=blend_file, fallback_identifier="NO_FILES")
 
         save_recent_browser_state(force=True)
     except Exception as e:
@@ -202,20 +1551,22 @@ def get_current_project_name(default='BTS'):
     if not raw_name:
         raw_name = default
 
-    return PROJECT_NAME_ALIASES.get(raw_name.upper(), raw_name.upper())
+    return normalize_project_name(raw_name)
 
 
 def get_config_by_project_name(project_name=None):
-    normalized = get_current_project_name() if project_name is None else PROJECT_NAME_ALIASES.get(str(project_name).strip().upper(), str(project_name).strip().upper())
+    ensure_project_config_loaded()
+    normalized = get_current_project_name() if project_name is None else normalize_project_name(project_name)
     return PROJECT_CONFIG.get(normalized, PROJECT_CONFIG['BTS'])
 
 
 def get_current_config():
+    ensure_project_config_loaded()
     return PROJECT_CONFIG.get(get_current_project_name(), PROJECT_CONFIG['BTS'])
 
 
 def get_project_paths(project_name=None):
-    return get_config_by_project_name(project_name)['drive']
+    return get_project_drive(project_name)
 
 
 def get_project_prefix(project_name=None):
@@ -236,10 +1587,6 @@ MODULE_NAME = "rrRender"
 last_mtime = None
 
 
-def normalize_path(path):
-    return os.path.normcase(os.path.abspath(path))
-
-
 def can_show_deploy_tools():
     return os.environ.get("USERNAME", "").strip().lower() in {user.lower() for user in DEPLOY_ALLOWED_USERS}
 
@@ -248,6 +1595,26 @@ def get_update_source_path():
     if os.environ.get("USERNAME", "").strip().lower() == "hwang":
         return HWANG_LOCAL_SCRIPT_PATH
     return SCRIPT_PATH
+
+
+def sync_hwang_local_project_json_files():
+    if not is_hwang_dev_environment():
+        return []
+    source_dir = get_local_project_settings_source_dir()
+    target_dir = get_runtime_project_settings_dir()
+    if not os.path.isdir(source_dir):
+        raise FileNotFoundError(f"Local JSON source dir not found: {source_dir}")
+
+    os.makedirs(target_dir, exist_ok=True)
+    copied_paths = []
+    for file_name in (PROJECT_SETTINGS_FILENAME, PROJECT_SCHEMA_FILENAME, PROJECT_OVERRIDE_FILENAME):
+        source_path = os.path.join(source_dir, file_name)
+        if not os.path.exists(source_path):
+            raise FileNotFoundError(f"Local JSON source file not found: {source_path}")
+        target_path = os.path.join(target_dir, file_name)
+        shutil.copy2(source_path, target_path)
+        copied_paths.append(target_path)
+    return copied_paths
 
 
 def get_next_script_backup_path(target_path=SCRIPT_PATH, backup_dir=SCRIPT_BACKUP_DIR):
@@ -291,15 +1658,66 @@ class DEV_OT_reload_rrrender(bpy.types.Operator):
         # 서버 → 로컬 복사
         try:
             shutil.copy2(source_path, local_path)
-            self.report({'INFO'}, f"{source_path} → {local_path} 복사 완료")
         except Exception as e:
             self.report({'ERROR'}, f"복사 실패: {e}")
             return {'CANCELLED'}
+
+        json_sync_message = ""
+        if is_hwang_dev_environment():
+            try:
+                copied_json_paths = sync_hwang_local_project_json_files()
+                json_sync_message = f" | JSON sync: {len(copied_json_paths)} files"
+            except Exception as e:
+                self.report({'WARNING'}, f"스크립트는 갱신됐지만 JSON sync 실패: {e}")
+
+        self.report({'INFO'}, f"{source_path} → {local_path} 복사 완료{json_sync_message}")
 
         # 🔄 Blender 전체 스크립트 리로드
         bpy.ops.script.reload()
 
         return {'FINISHED'}
+
+
+def _dev_reload_rrrender_execute(self, context):
+    module_name = "rrRender"
+    source_path = get_update_source_path()
+
+    if module_name in sys.modules:
+        mod = sys.modules[module_name]
+        local_path = os.path.abspath(mod.__file__)
+    else:
+        self.report({'ERROR'}, f"{module_name} 모듈을 찾을 수 없음")
+        return {'CANCELLED'}
+
+    try:
+        shutil.copy2(source_path, local_path)
+    except Exception as e:
+        self.report({'ERROR'}, f"복사 실패: {e}")
+        return {'CANCELLED'}
+
+    json_sync_message = ""
+    if is_hwang_dev_environment():
+        try:
+            copied_json_paths = sync_hwang_local_project_json_files()
+            json_sync_message = f" | JSON sync: {len(copied_json_paths)} files"
+        except Exception as e:
+            self.report({'WARNING'}, f"스크립트는 갱신됐지만 JSON sync 실패: {e}")
+
+    self.report({'INFO'}, f"{source_path} -> {local_path} 복사 완료{json_sync_message}")
+
+    try:
+        bpy.ops.script.reload()
+    except RuntimeError as e:
+        message = str(e)
+        if "running modal operators" in message:
+            self.report({'WARNING'}, "스크립트 파일은 업데이트됐지만 현재 모달 작업 때문에 자동 리로드는 못 했습니다. 작업 종료 후 Update Script를 한 번 더 눌러주세요.")
+        else:
+            self.report({'WARNING'}, f"스크립트 파일은 업데이트됐지만 자동 리로드는 실패했습니다: {e}")
+
+    return {'FINISHED'}
+
+
+DEV_OT_reload_rrrender.execute = _dev_reload_rrrender_execute
 
 
 class DEV_OT_deploy_rrrender(bpy.types.Operator):
@@ -399,17 +1817,180 @@ def extract_scene_cut_from_filename(filepath):
         return scene_number, cut_number
     return None, None
 
+
+def infer_project_from_filepath(filepath):
+    ensure_project_config_loaded()
+    filename = os.path.basename(str(filepath or ""))
+    if not filename:
+        return ""
+
+    for project_name in sorted(PROJECT_CONFIG.keys()):
+        prefix = str(get_project_prefix(project_name) or "").strip()
+        if not prefix:
+            continue
+        if re.match(rf"(?i)^{re.escape(prefix)}_", filename):
+            return project_name
+    return ""
+
+
+def extract_scene_cut_from_root_relative_path(filepath, project_name=None):
+    normalized_path = normalize_directory_choice(filepath)
+    scene_root_path = normalize_directory_choice(get_scene_root_path(project_name))
+    if not normalized_path or not scene_root_path:
+        return "", ""
+
+    file_directory = normalize_directory_choice(os.path.dirname(normalized_path))
+    file_dir_lower = file_directory.lower()
+    scene_root_lower = scene_root_path.lower().rstrip("/")
+    if not file_dir_lower.startswith(scene_root_lower):
+        return "", ""
+
+    relative = file_directory[len(scene_root_lower):].strip("/")
+    if not relative:
+        return "", ""
+
+    parts = [part for part in relative.split("/") if part]
+    work_dirs = {str(name).lower() for name in get_scene_work_dir_names(project_name)}
+    if len(parts) >= 3 and str(parts[2]).lower() in work_dirs:
+        return parts[0], parts[1]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    return "", ""
+
+
+def extract_browser_level_values_from_root_relative_path(filepath, project_name=None):
+    normalized_path = normalize_directory_choice(filepath)
+    scene_root_path = normalize_directory_choice(get_scene_root_path(project_name))
+    if not normalized_path or not scene_root_path:
+        return []
+
+    file_directory = normalize_directory_choice(os.path.dirname(normalized_path))
+    file_dir_lower = file_directory.lower()
+    scene_root_lower = scene_root_path.lower().rstrip("/")
+    if not file_dir_lower.startswith(scene_root_lower):
+        return []
+
+    relative = file_directory[len(scene_root_lower):].strip("/")
+    if not relative:
+        return []
+
+    parts = [part for part in relative.split("/") if part]
+    work_dirs = {str(name).lower() for name in get_scene_work_dir_names(project_name)}
+    values = []
+    for part in parts:
+        if str(part).lower() in work_dirs:
+            break
+        values.append(part)
+    return values
+
+
+def sync_browser_to_filepath(context=None, filepath=None, save_state=True):
+    global _browser_sync_suspended, _pending_browser_focus_filepath
+    context = bpy.context if context is None else context
+    filepath = bpy.data.filepath if filepath is None else filepath
+    if not context or not getattr(context, "scene", None) or not filepath:
+        return False
+
+    scene = context.scene
+    my_tool = getattr(scene, "my_tool", None)
+    project_settings = getattr(scene, "my_project_settings", None)
+    if not my_tool or not project_settings:
+        return False
+
+    project_name = infer_project_from_filepath(filepath) or get_current_project_name()
+    scene_number = ""
+    cut_number = ""
+    level_values = []
+
+    try:
+        _browser_sync_suspended = True
+
+        original_project = get_current_project_name()
+        if project_name and project_name != original_project:
+            try:
+                project_settings.projects = project_name
+            except Exception:
+                pass
+
+        normalized_path = str(filepath).replace("\\", "/")
+        work_dirs_pattern = "|".join(re.escape(name.strip("/\\")) for name in get_scene_work_dir_names(project_name))
+
+        level_values = extract_browser_level_values_from_root_relative_path(normalized_path, project_name)
+        if level_values:
+            scene_number = level_values[0] if len(level_values) >= 1 else ""
+            cut_number = level_values[1] if len(level_values) >= 2 else scene_number
+
+        if not scene_number or not cut_number:
+            scene_root_name = re.escape(get_project_scene_root_dir(project_name).strip("/\\"))
+            path_match = re.search(rf"/{scene_root_name}/([^/]+)/([^/]+)/({work_dirs_pattern})/", normalized_path)
+            if path_match:
+                scene_number, cut_number, _work_dir_name = path_match.groups()
+            else:
+                filename = os.path.basename(normalized_path)
+                file_match = re.search(rf"_([0-9]{{4}})_([0-9]{{4}})_({work_dirs_pattern})_", filename)
+                if file_match:
+                    scene_number, cut_number, _work_dir_name = file_match.groups()
+
+        if not scene_number or not cut_number:
+            scene_number, cut_number = extract_scene_cut_from_filename(filepath)
+
+        if not scene_number or not cut_number:
+            return False
+
+        scene_items = get_cached_scenes()
+        safe_set_enum_property(my_tool, "scene_number", scene_items, preferred_value=scene_number, fallback_identifier="NO_SCENES")
+
+        cut_items = get_cached_cuts(scene_number)
+        safe_set_enum_property(my_tool, "cut_number", cut_items, preferred_value=cut_number, fallback_identifier="NO_CUTS")
+
+        for index in range(3, MAX_BROWSER_LEVELS + 1):
+            level_items = get_browser_level_items(index, context, project_name)
+            preferred_value = level_values[index - 1] if len(level_values) >= index else ""
+            safe_set_enum_property(my_tool, f"browser_level_{index}", level_items, preferred_value=preferred_value, fallback_identifier=f"NO_LEVEL{index}")
+
+        enum_value = find_blend_file_enum_value(scene_number, cut_number, filepath, context)
+        if enum_value:
+            my_tool.blend_file = enum_value
+        else:
+            set_blend_file_to_first_available(context)
+    finally:
+        _browser_sync_suspended = False
+
+    if save_state:
+        save_recent_browser_state(context, force=True)
+    if filepath and _pending_browser_focus_filepath:
+        try:
+            if normalize_path(filepath) == normalize_path(_pending_browser_focus_filepath):
+                _pending_browser_focus_filepath = ""
+        except Exception:
+            pass
+    return True
+
+
+def schedule_browser_sync(filepath=None, delay=0.15):
+    target_path = bpy.data.filepath if filepath is None else filepath
+
+    def _deferred_sync():
+        try:
+            if target_path and bpy.data.filepath and normalize_path(target_path) == normalize_path(bpy.data.filepath):
+                sync_browser_to_filepath(bpy.context, bpy.data.filepath, save_state=True)
+        except Exception as e:
+            print(f"[BrowserSync][WARN] deferred sync failed: {e}")
+        return None
+
+    try:
+        bpy.app.timers.register(_deferred_sync, first_interval=delay)
+    except Exception as e:
+        print(f"[BrowserSync][WARN] schedule failed: {e}")
+
 def get_character_dir():
-    base_path = get_project_paths()
-    return os.path.join(base_path, "assets", "ch")
+    return get_asset_category_path("ch")
 
 def get_background_dir():
-    base_path = get_project_paths()
-    return os.path.join(base_path, "assets", "bg")
+    return get_asset_category_path("bg")
 
 def get_prop_dir():
-    base_path = get_project_paths()
-    return os.path.join(base_path, "assets", "prop")
+    return get_asset_category_path("prop")
 
 # ---- helper: 인스턴스 꼬리('_<숫자>')만 안전하게 제거 ----
 def get_asset_base_name(name: str) -> str:
@@ -504,9 +2085,9 @@ class OpenSceneFolderOperator(bpy.types.Operator):
         return context.scene.my_tool.scene_number != ''
 
     def execute(self, context):
-        base_path = get_project_paths()
+        global _pending_browser_focus_filepath
         scene_number = context.scene.my_tool.scene_number
-        path = os.path.join(base_path, "scenes", scene_number)
+        path = get_scene_path(scene_number)
         open_folder(path)
         return {'FINISHED'}
 
@@ -519,11 +2100,323 @@ class OpenCutFolderOperator(bpy.types.Operator):
         return context.scene.my_tool.cut_number != ''
 
     def execute(self, context):
+        global _pending_browser_focus_filepath
         scene_number = context.scene.my_tool.scene_number
         cut_number = context.scene.my_tool.cut_number
-        base_path = get_project_paths()
-        path = os.path.join(base_path, "scenes", scene_number, cut_number)
+        path = get_cut_path(scene_number, cut_number)
         open_folder(path)
+        return {'FINISHED'}
+
+
+class SF_OT_ProjectPathSettingsPopup(bpy.types.Operator):
+    bl_idname = "sf.project_path_settings_popup"
+    bl_label = "Project Path Settings"
+    bl_description = "Edit project-specific path settings"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def invoke(self, context, event):
+        load_project_path_settings_to_ui(context)
+        return context.window_manager.invoke_props_dialog(self, width=720)
+
+    def draw(self, context):
+        layout = self.layout
+        scene = context.scene
+        settings = scene.sf_project_paths
+
+        header = layout.box()
+        header.label(text=f"Project: {get_current_project_name()}", icon='TOOL_SETTINGS')
+        row = header.row(align=True)
+        row.operator("sf.new_project_popup", icon='ADD')
+        row.operator("sf.validate_project", icon='CHECKMARK')
+        row.operator("sf.reload_project_path_settings", icon='FILE_REFRESH')
+        row.operator("sf.reset_project_path_settings", icon='LOOP_BACK')
+
+        col = layout.column(align=True)
+        draw_project_path_field(col, settings, "drive")
+        col.prop(settings, "prefix")
+        draw_project_path_field(col, settings, "asset_base")
+        draw_project_path_field(col, settings, "scene_base")
+        draw_project_path_field(col, settings, "project_json_base")
+        draw_project_path_field(col, settings, "output_base")
+
+        box = layout.box()
+        box.label(text="Asset Sub Paths")
+        grid = box.grid_flow(columns=3, align=True)
+        grid.prop(settings, "asset_ch_dir")
+        grid.prop(settings, "asset_bg_dir")
+        grid.prop(settings, "asset_prop_dir")
+
+        box = layout.box()
+        box.label(text="Scene Structure")
+        grid = box.grid_flow(columns=4, align=True)
+        grid.prop(settings, "scene_root_dir")
+        grid.prop(settings, "ren_dir")
+        grid.prop(settings, "cache_dir")
+        grid.prop(settings, "publish_dir")
+
+        box = layout.box()
+        box.label(text="Browser Levels")
+        box.prop(settings, "browser_level_count")
+        for index in range(1, settings.browser_level_count + 1):
+            box.prop(settings, f"browser_level_{index}_label", text=f"Level {index}")
+
+        box = layout.box()
+        box.label(text="Asset Structure")
+        box.prop(settings, "geometry_root_hint")
+
+    def execute(self, context):
+        save_project_path_settings_from_ui(context)
+        self.report({'INFO'}, f"Saved project path settings for {get_current_project_name()}")
+        return {'FINISHED'}
+
+
+class SF_OT_PickProjectPath(bpy.types.Operator):
+    bl_idname = "sf.pick_project_path"
+    bl_label = "Pick Project Path"
+    bl_description = "Choose a folder for the selected project path field"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    target_field: bpy.props.EnumProperty(
+        name="Target Field",
+        items=[
+            ('drive', "Drive", ""),
+            ('asset_base', "Asset Base", ""),
+            ('scene_base', "Scene Base", ""),
+            ('project_json_base', "Project Json Base", ""),
+            ('output_base', "Output Base", ""),
+        ]
+    )
+    directory: bpy.props.StringProperty(subtype='DIR_PATH')
+
+    def invoke(self, context, event):
+        settings = context.scene.sf_project_paths
+        self.directory = getattr(settings, self.target_field, "")
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        settings = context.scene.sf_project_paths
+        setattr(settings, self.target_field, normalize_directory_choice(self.directory))
+        return {'FINISHED'}
+
+
+def draw_project_path_field(layout, settings, field_name):
+    row = layout.row(align=True)
+    row.prop(settings, field_name)
+    picker = row.operator("sf.pick_project_path", text="", icon='FILE_FOLDER')
+    picker.target_field = field_name
+
+
+class SF_OT_NewProjectPopup(bpy.types.Operator):
+    bl_idname = "sf.new_project_popup"
+    bl_label = "New Project Wizard"
+    bl_description = "Create a new rrRender project configuration from a publish file and a scene file"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    project_name: bpy.props.StringProperty(name="Project Name")
+    prefix: bpy.props.StringProperty(name="Prefix")
+    publish_file: bpy.props.StringProperty(name="Publish File", subtype='FILE_PATH')
+    scene_file: bpy.props.StringProperty(name="Scene File", subtype='FILE_PATH')
+    geometry_root_hint: bpy.props.StringProperty(name="Geometry Root", default="Geometry/{asset_name}")
+
+    def invoke(self, context, event):
+        self.project_name = ""
+        self.prefix = ""
+        self.publish_file = ""
+        self.scene_file = ""
+        self.geometry_root_hint = "Geometry/{asset_name}"
+        return context.window_manager.invoke_props_dialog(self, width=720)
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+        box.label(text="Project Info", icon='TOOL_SETTINGS')
+        box.prop(self, "project_name")
+        box.prop(self, "prefix")
+
+        files = layout.box()
+        files.label(text="Example Files", icon='FILE_FOLDER')
+        files.prop(self, "publish_file")
+        files.prop(self, "scene_file")
+
+        structure = layout.box()
+        structure.label(text="Geometry Root Hint", icon='MESH_DATA')
+        structure.prop(self, "geometry_root_hint")
+        structure.label(text="Example: Geometry/{asset_name} or geo", icon='INFO')
+
+    def execute(self, context):
+        try:
+            normalized_name = normalize_project_name(self.project_name)
+            if not normalized_name:
+                raise ValueError("Project name is empty.")
+            if normalized_name in PROJECT_CONFIG:
+                raise ValueError(f"Project already exists: {normalized_name}")
+
+            inferred_config, report_lines = infer_project_config_from_example_files(
+                normalized_name,
+                self.publish_file,
+                self.scene_file,
+                prefix=self.prefix,
+                geometry_root_hint=self.geometry_root_hint,
+            )
+            project_name = create_new_project_config(normalized_name, self.prefix)
+        except Exception as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+        PROJECT_CONFIG[project_name] = normalize_project_config_entry(project_name, inferred_config)
+        save_project_config_store()
+        context.scene.my_project_settings.projects = project_name
+        load_project_path_settings_to_ui(context, project_name)
+        clear_path_caches()
+        write_or_replace_text_block("rrRender_ProjectWizardReport", report_lines)
+        self.report({'INFO'}, f"Created project {project_name} from wizard")
+        return {'FINISHED'}
+
+
+def get_selected_asset_items(scene):
+    selected_items = []
+    for category in scene.sf_file_categories:
+        for item in category.items:
+            if item.is_selected:
+                selected_items.append((category.name, item.name))
+    return selected_items
+
+
+class SF_OT_ValidateProject(bpy.types.Operator):
+    bl_idname = "sf.validate_project"
+    bl_label = "Validate Project"
+    bl_description = "Dry-run validation of current project paths, assets, and cache targets"
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        scene = context.scene
+        my_tool = getattr(scene, "my_tool", None)
+        project_name = get_current_project_name()
+        project_config = get_current_config()
+
+        scene_number = str(getattr(my_tool, "scene_number", "") or "")
+        cut_number = str(getattr(my_tool, "cut_number", "") or "")
+        selected_items = get_selected_asset_items(scene)
+
+        report_lines = []
+        ok_count = 0
+        warn_count = 0
+        error_count = 0
+
+        def add(level, message):
+            nonlocal ok_count, warn_count, error_count
+            report_lines.append(f"[{level}] {message}")
+            if level == "OK":
+                ok_count += 1
+            elif level == "WARN":
+                warn_count += 1
+            elif level == "ERROR":
+                error_count += 1
+
+        report_lines.append("=" * 80)
+        report_lines.append(f"rrRender Validate Report | Project: {project_name}")
+        report_lines.append(f"Scene: {scene_number or '-'} | Cut: {cut_number or '-'}")
+        report_lines.append("=" * 80)
+        report_lines.append("")
+
+        for key in PROJECT_CONFIG_FIELDS:
+            value = str(project_config.get(key, "") or "")
+            if value:
+                add("OK", f"Config {key} = {value}")
+            else:
+                add("WARN", f"Config {key} is empty")
+
+        scene_root_path = get_scene_root_path(project_name)
+        add("OK" if os.path.exists(scene_root_path) else "ERROR", f"Scene root path: {scene_root_path}")
+
+        render_setting_path = get_project_json_path("renderSetting.json", project_name)
+        add("OK" if os.path.exists(render_setting_path) else "WARN", f"Render setting JSON: {render_setting_path}")
+
+        render_preset_path = get_render_preset_json_path(project_name)
+        add("OK" if render_preset_path and os.path.exists(render_preset_path) else "WARN", f"Render preset JSON: {render_preset_path}")
+
+        if scene_number:
+            scene_path = get_scene_path(scene_number, project_name)
+            add("OK" if os.path.exists(scene_path) else "ERROR", f"Scene path: {scene_path}")
+        else:
+            add("WARN", "Scene number is empty")
+
+        if scene_number and cut_number:
+            cut_path = get_cut_path(scene_number, cut_number, project_name)
+            ren_path = get_ren_path(scene_number, cut_number, project_name)
+            cache_path = get_cache_path(scene_number, cut_number, project_name)
+            add("OK" if os.path.exists(cut_path) else "ERROR", f"Cut path: {cut_path}")
+            add("OK" if os.path.exists(ren_path) else "WARN", f"Render work path: {ren_path}")
+            add("OK" if os.path.exists(cache_path) else "WARN", f"Cache path: {cache_path}")
+        else:
+            add("WARN", "Cut number is empty")
+
+        report_lines.append("")
+        report_lines.append("-" * 80)
+        report_lines.append(f"Selected Assets: {len(selected_items)}")
+        report_lines.append("-" * 80)
+
+        if not selected_items:
+            add("WARN", "No selected assets in Scene Browser")
+
+        for cat_name, asset_name in selected_items:
+            report_lines.append("")
+            report_lines.append(f"[ASSET] {asset_name} ({cat_name})")
+
+            blend_path = get_asset_blend_path(cat_name, asset_name, project_name)
+            add("OK" if os.path.exists(blend_path) else "ERROR", f"Publish blend: {blend_path}")
+
+            asset_col = bpy.data.collections.get(f"{asset_name}_col")
+            if asset_col:
+                add("OK", f"Scene collection found: {asset_col.name}")
+                geometry_root = resolve_asset_geometry_root(asset_col, asset_name)
+                if geometry_root:
+                    mesh_count = sum(1 for _ in iter_asset_geometry_meshes(asset_col, asset_name))
+                    add("OK", f"Geometry root: {geometry_root.name} | mesh count: {mesh_count}")
+                else:
+                    add("WARN", f"Geometry root not resolved inside {asset_col.name}")
+            else:
+                add("WARN", f"Scene collection missing: {asset_name}_col")
+
+            if scene_number and cut_number:
+                expected_usd_path = get_usd_path(scene_number, cut_number, asset_name, project_name, cat_name)
+                usd_found_path = expected_usd_path if os.path.exists(expected_usd_path) else None
+
+                cache_dir = get_cache_path(scene_number, cut_number, project_name)
+                search_target = f"_{cat_name}_{asset_name}.".lower()
+                if not usd_found_path and os.path.exists(cache_dir):
+                    for filename in os.listdir(cache_dir):
+                        if filename.lower().endswith(".usd") and search_target in filename.lower():
+                            usd_found_path = os.path.join(cache_dir, filename)
+                            break
+
+                if usd_found_path:
+                    add("OK", f"USD cache: {usd_found_path}")
+                else:
+                    add("WARN", f"USD cache not found for {asset_name}")
+
+        report_lines.append("")
+        report_lines.append("=" * 80)
+        report_lines.append(f"Summary | OK: {ok_count} | WARN: {warn_count} | ERROR: {error_count}")
+        report_lines.append("=" * 80)
+
+        text_name = "rrRender_ValidateReport"
+        try:
+            text_block = bpy.data.texts.get(text_name) or bpy.data.texts.new(text_name)
+            text_block.clear()
+            text_block.write("\n".join(report_lines))
+        except Exception as e:
+            print(f"[Validate][WARN] Could not write text block: {e}")
+
+        for line in report_lines:
+            print(line)
+
+        scene.sf_message = f"Validate complete | OK {ok_count} | WARN {warn_count} | ERROR {error_count}"
+        if error_count:
+            self.report({'WARNING'}, scene.sf_message)
+        else:
+            self.report({'INFO'}, scene.sf_message)
         return {'FINISHED'}
     
 def set_blend_file_to_first_available(context):
@@ -537,46 +2430,334 @@ def set_blend_file_to_first_available(context):
     try:
         items = get_blend_files(my_tool, context)
         if items:
-            my_tool.blend_file = items[0][0]
+            current_value = str(getattr(my_tool, "blend_file", "") or "")
+            safe_set_enum_property(my_tool, "blend_file", items, preferred_value=current_value, fallback_identifier="NO_FILES")
     except Exception as e:
         print(f"[RecentState][WARN] blend_file fallback failed: {e}")
 
 
-def update_project_selection(self, context):
+def populate_browser_levels_from_index(context, start_index):
+    my_tool = getattr(context.scene, "my_tool", None)
+    if not my_tool:
+        return
+
+    for index in range(max(3, start_index), MAX_BROWSER_LEVELS + 1):
+        level = get_browser_level_definition(index)
+        attr_name = f"browser_level_{index}"
+        if not level:
+            continue
+
+        items = get_browser_level_items(index, context)
+        current_value = str(getattr(my_tool, attr_name, "") or "")
+        safe_set_enum_property(my_tool, attr_name, items, preferred_value=current_value, fallback_identifier=f"NO_LEVEL{index}")
+
+
+def update_browser_hierarchy(context, changed_level_index=1):
+    if _browser_sync_suspended:
+        return
+    populate_browser_levels_from_index(context, changed_level_index + 1)
     set_blend_file_to_first_available(context)
     save_recent_browser_state(context)
+
+
+def update_project_selection(self, context):
+    if _browser_sync_suspended:
+        return
+    load_project_path_settings_to_ui(context)
+    populate_browser_levels_from_index(context, 3)
+    set_blend_file_to_first_available(context)
+    save_recent_browser_state(context)
+
+
+def load_project_path_settings_to_ui(context, project_name=None):
+    scene = context.scene
+    settings = getattr(scene, "sf_project_paths", None)
+    if settings is None:
+        return
+
+    config = get_config_by_project_name(project_name)
+    settings.drive = str(config.get("drive", ""))
+    settings.prefix = str(config.get("prefix", ""))
+    settings.asset_base = str(config.get("asset_base", ""))
+    settings.scene_base = str(config.get("scene_base", ""))
+    settings.project_json_base = str(config.get("project_json_base", ""))
+    settings.output_base = str(config.get("output_base", ""))
+    settings.asset_ch_dir = str(config.get("asset_ch_dir", "ch"))
+    settings.asset_bg_dir = str(config.get("asset_bg_dir", "bg"))
+    settings.asset_prop_dir = str(config.get("asset_prop_dir", "prop"))
+    settings.scene_root_dir = str(get_schema_scene_root_path(project_name) or config.get("scene_root_dir", "scenes"))
+    settings.ren_dir = str(get_project_ren_dir_name(project_name) or config.get("ren_dir", "ren"))
+    settings.cache_dir = str(config.get("cache_dir", "cache"))
+    settings.publish_dir = str(config.get("publish_dir", "pub"))
+    settings.geometry_root_hint = str(config.get("geometry_root_hint", "Geometry/{asset_name}"))
+    browser_levels = get_browser_non_work_levels(project_name)
+    settings.browser_level_count = max(1, len(browser_levels) or 1)
+    for index in range(1, MAX_BROWSER_LEVELS + 1):
+        label = get_browser_level_label(index, project_name) if index <= len(browser_levels) else f"Level {index}"
+        setattr(settings, f"browser_level_{index}_label", label)
+
+
+def save_project_path_settings_from_ui(context, project_name=None):
+    scene = context.scene
+    settings = getattr(scene, "sf_project_paths", None)
+    if settings is None:
+        return
+
+    project_name = get_current_project_name() if project_name is None else normalize_project_name(project_name)
+    raw_scene_root = normalize_directory_choice(settings.scene_root_dir)
+    scene_base_value = normalize_directory_choice(settings.scene_base)
+    scene_root_dir_value = settings.scene_root_dir
+    if raw_scene_root and "/" in raw_scene_root.strip("/"):
+        drive, parts = split_normalized_path(raw_scene_root)
+        if parts:
+            scene_base_value = join_normalized_path(drive, parts[:-1]) if parts[:-1] else drive
+            scene_root_dir_value = parts[-1]
+
+    PROJECT_CONFIG[project_name] = normalize_project_config_entry(project_name, {
+        "drive": normalize_directory_choice(settings.drive),
+        "prefix": settings.prefix,
+        "asset_base": normalize_directory_choice(settings.asset_base),
+        "scene_base": scene_base_value,
+        "project_json_base": normalize_directory_choice(settings.project_json_base),
+        "output_base": normalize_directory_choice(settings.output_base),
+        "asset_ch_dir": settings.asset_ch_dir,
+        "asset_bg_dir": settings.asset_bg_dir,
+        "asset_prop_dir": settings.asset_prop_dir,
+        "scene_root_dir": scene_root_dir_value,
+        "ren_dir": settings.ren_dir,
+        "cache_dir": settings.cache_dir,
+        "publish_dir": settings.publish_dir,
+        "geometry_root_hint": settings.geometry_root_hint,
+    })
+    save_project_config_store()
+    upsert_schema_from_project_config(project_name, PROJECT_CONFIG[project_name])
+
+    schema_entry = get_project_schema_entry(project_name)
+    scene_browser = schema_entry.get("scene_browser", {}) if isinstance(schema_entry, dict) else {}
+    existing_levels = scene_browser.get("levels", []) if isinstance(scene_browser, dict) else []
+    work_level = None
+    for level in existing_levels:
+        if isinstance(level, dict) and isinstance(level.get("fixed_options"), list):
+            work_level = deepcopy(level)
+            break
+    if not work_level:
+        work_level = {
+            "id": "work",
+            "label": "Work",
+            "parent_level": "cut",
+            "fixed_options": list(get_scene_work_dir_names_from_config(PROJECT_CONFIG[project_name])),
+            "default": str(PROJECT_CONFIG[project_name].get("ren_dir", "ren") or "ren"),
+        }
+
+    label_map = {
+        1: settings.browser_level_1_label,
+        2: settings.browser_level_2_label,
+        3: settings.browser_level_3_label,
+        4: settings.browser_level_4_label,
+        5: settings.browser_level_5_label,
+    }
+    non_work_levels = build_schema_non_work_levels(
+        settings.scene_root_dir,
+        settings.browser_level_count,
+        label_map,
+    )
+    if non_work_levels:
+        work_level["parent_level"] = non_work_levels[-1]["id"]
+    scene_browser["levels"] = non_work_levels + [work_level]
+    scene_browser["file_level_id"] = work_level.get("id", "work")
+    scene_browser.setdefault("file_extensions", [".blend"])
+    schema_entry["scene_browser"] = scene_browser
+    set_project_schema_entry(project_name, schema_entry)
+    sync_pipeline_config_from_rrrender(project_name, PROJECT_CONFIG[project_name], scene_browser)
+    save_project_schema_store()
+    save_project_override_store()
+    clear_path_caches()
+    populate_browser_levels_from_index(context, 3)
+
+
+def sync_pipeline_config_from_rrrender(project_name, config, scene_browser=None):
+    if not (PIPELINE_SHARED_AVAILABLE and load_pipeline_config and save_pipeline_config and sync_legacy_rrrender_paths_json):
+        return
+
+    payload = load_pipeline_config()
+    project = get_pipeline_project_entry(project_name, payload) or {"identity": {}, "paths": {}, "assets": {}, "scene_structure": {}, "scene_browser": {}, "cache": {}, "output": {}}
+
+    drive = normalize_directory_choice(config.get("drive", ""))
+    asset_base = normalize_directory_choice(config.get("asset_base", ""))
+    scene_base = normalize_directory_choice(config.get("scene_base", ""))
+    json_base = normalize_directory_choice(config.get("project_json_base", ""))
+    output_base = normalize_directory_choice(config.get("output_base", ""))
+    scene_root_dir = str(config.get("scene_root_dir", "scenes") or "scenes").strip("/")
+    scene_root = join_normalized_path(scene_base, [scene_root_dir]) if scene_base else scene_root_dir
+
+    identity = project.setdefault("identity", {})
+    identity["project_id"] = project_name
+    identity["project_prefix"] = str(config.get("prefix", project_name) or project_name)
+
+    paths = project.setdefault("paths", {})
+    paths["project_root"] = drive
+    paths["asset_root"] = asset_base
+    paths["scene_root"] = scene_root
+    paths["json_root"] = json_base
+    paths["output_root"] = output_base
+    if json_base:
+        paths["render_preset_json"] = join_normalized_path(json_base, ["_json", "renderPreset.json"])
+        paths["render_setting_json"] = join_normalized_path(json_base, ["_json", "renderSetting.json"])
+
+    assets = project.setdefault("assets", {})
+    categories = assets.setdefault("categories", [])
+    category_defaults = [
+        ("ch", "Character", str(config.get("asset_ch_dir", "ch") or "ch")),
+        ("bg", "Background", str(config.get("asset_bg_dir", "bg") or "bg")),
+        ("prop", "Prop", str(config.get("asset_prop_dir", "prop") or "prop")),
+    ]
+    existing = dict((str(item.get("id", "")), item) for item in categories if isinstance(item, dict))
+    rebuilt = []
+    for category_id, label, sub_dir in category_defaults:
+        item = deepcopy(existing.get(category_id, {}))
+        item["id"] = category_id
+        item.setdefault("label", label)
+        item["root_path"] = join_normalized_path(asset_base, [sub_dir]) if asset_base else sub_dir
+        item["geometry_root_hint"] = str(config.get("geometry_root_hint", "geo") or "geo")
+        rebuilt.append(item)
+    assets["categories"] = rebuilt
+
+    scene_structure = project.setdefault("scene_structure", {})
+    scene_structure["cache_relative_path"] = str(config.get("cache_dir", "cache") or "cache")
+    scene_structure["identifier_source"] = "filename" if str(config.get("scene_identifier_mode", "") or "").lower() == "filename" else "folder_depth"
+
+    cache_config = project.setdefault("cache", {})
+    cache_config["root_mode"] = "relative_to_work"
+    cache_config["root_template"] = "{work_path}/" + str(config.get("cache_dir", "cache") or "cache")
+
+    output_config = project.setdefault("output", {})
+    if output_base:
+        output_config["root_template"] = output_base
+
+    if scene_browser:
+        project["scene_browser"] = deepcopy(scene_browser)
+
+    payload.setdefault("projects", {})[project_name] = project
+    save_pipeline_config(payload)
+    sync_legacy_rrrender_paths_json(payload)
+
+
+def clear_path_caches():
+    try:
+        cache["scenes"].clear()
+        cache["cuts"].clear()
+    except Exception:
+        pass
+
+
+def create_new_project_config(project_name, prefix="", drive=""):
+    normalized_name = normalize_project_name(project_name)
+    if not normalized_name:
+        raise ValueError("Project name is empty.")
+    if normalized_name in PROJECT_CONFIG:
+        raise ValueError(f"Project already exists: {normalized_name}")
+
+    template = normalize_project_config_entry('BTS', DEFAULT_PROJECT_CONFIG.get('BTS', {}))
+    if drive:
+        normalized_drive = normalize_directory_choice(drive)
+        template["drive"] = normalized_drive
+        template["scene_base"] = normalized_drive
+        template["project_json_base"] = normalized_drive
+        template["output_base"] = normalized_drive
+        template["asset_base"] = os.path.join(normalized_drive, "assets").replace("\\", "/")
+    if prefix:
+        template["prefix"] = str(prefix).strip()
+
+    PROJECT_CONFIG[normalized_name] = template
+    PROJECT_NAME_ALIASES[normalized_name.upper()] = normalized_name
+    save_project_config_store()
+    upsert_schema_from_project_config(normalized_name, template)
+    save_project_schema_store()
+    save_project_override_store()
+    return normalized_name
+
+
+class SF_ProjectPathSettings(bpy.types.PropertyGroup):
+    drive: bpy.props.StringProperty(name="Drive", subtype='DIR_PATH')
+    prefix: bpy.props.StringProperty(name="Prefix")
+    asset_base: bpy.props.StringProperty(name="Asset Base", subtype='DIR_PATH')
+    scene_base: bpy.props.StringProperty(name="Scene Base", subtype='DIR_PATH')
+    project_json_base: bpy.props.StringProperty(name="Project Json Base", subtype='DIR_PATH')
+    output_base: bpy.props.StringProperty(name="Output Base", subtype='DIR_PATH')
+    asset_ch_dir: bpy.props.StringProperty(name="CH", default="ch")
+    asset_bg_dir: bpy.props.StringProperty(name="BG", default="bg")
+    asset_prop_dir: bpy.props.StringProperty(name="PROP", default="prop")
+    scene_root_dir: bpy.props.StringProperty(name="Scene Root", default="scenes")
+    ren_dir: bpy.props.StringProperty(name="Ren", default="ren")
+    cache_dir: bpy.props.StringProperty(name="Cache", default="cache")
+    publish_dir: bpy.props.StringProperty(name="Publish", default="pub")
+    geometry_root_hint: bpy.props.StringProperty(name="Geometry Root", default="Geometry/{asset_name}")
+    browser_level_count: bpy.props.IntProperty(name="Levels", default=2, min=1, max=5)
+    browser_level_1_label: bpy.props.StringProperty(name="Level 1", default="Scene")
+    browser_level_2_label: bpy.props.StringProperty(name="Level 2", default="Cut")
+    browser_level_3_label: bpy.props.StringProperty(name="Level 3", default="Level 3")
+    browser_level_4_label: bpy.props.StringProperty(name="Level 4", default="Level 4")
+    browser_level_5_label: bpy.props.StringProperty(name="Level 5", default="Level 5")
+
+
+class SF_OT_SaveProjectPathSettings(bpy.types.Operator):
+    bl_idname = "sf.save_project_path_settings"
+    bl_label = "Save Project Paths"
+    bl_description = "Save current project's path settings to JSON"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        save_project_path_settings_from_ui(context)
+        self.report({'INFO'}, f"Saved project path settings for {get_current_project_name()}")
+        return {'FINISHED'}
+
+
+class SF_OT_ReloadProjectPathSettings(bpy.types.Operator):
+    bl_idname = "sf.reload_project_path_settings"
+    bl_label = "Reload Project Paths"
+    bl_description = "Reload current project's path settings from JSON"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        ensure_project_config_loaded(force=True)
+        load_project_path_settings_to_ui(context)
+        clear_path_caches()
+        self.report({'INFO'}, f"Reloaded project path settings for {get_current_project_name()}")
+        return {'FINISHED'}
+
+
+class SF_OT_ResetProjectPathSettings(bpy.types.Operator):
+    bl_idname = "sf.reset_project_path_settings"
+    bl_label = "Reset Project Paths"
+    bl_description = "Reset current project's path settings to legacy defaults"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        project_name = get_current_project_name()
+        PROJECT_CONFIG[project_name] = normalize_project_config_entry(project_name, DEFAULT_PROJECT_CONFIG.get(project_name, {}))
+        save_project_config_store()
+        load_project_path_settings_to_ui(context, project_name)
+        clear_path_caches()
+        self.report({'INFO'}, f"Reset project path settings for {project_name}")
+        return {'FINISHED'}
 
 
 class MyProjectSettings1(bpy.types.PropertyGroup):
     projects: bpy.props.EnumProperty(
         name="Projects",
         description="Select a project",
-        items=[
-            ('THE_TRAP', "The Trap Movie", "Located in T:\\ drive"),
-            ('ARBOBION', "Arbo&Bion", "Located in A:\\ drive"),
-            ('DSC', "DSC", "Located in S:\\ drive"),
-            ('BTS', "BTS", "Located in B:\\ drive"),            
-            ('FUZZ', "FUZZ", "Located in Z:\\ drive")
-        ],
+        items=get_project_enum_items,
         update=update_project_selection
     )
     
 # 씬 목록을 캐시에서 가져오거나, 없으면 로드
 def get_cached_scenes():
-    base_path = get_project_paths()
-    scene_path = os.path.join(base_path, "scenes")
+    scene_path = get_scene_root_path()
     if scene_path in cache["scenes"]:
         return cache["scenes"][scene_path]
-
-    scenes = []
-    if os.path.exists(scene_path):
-        for scene in sorted(os.listdir(scene_path)):
-            if (
-                os.path.isdir(os.path.join(scene_path, scene)) and
-                not scene.startswith('.') and
-                not scene.startswith('_')
-            ):
-                scenes.append((scene, scene, ""))
+    scenes = list_browser_child_dirs(scene_path)
+    if not scenes:
+        scenes = [("NO_SCENES", "No Scenes", "No scenes available")]
 
     cache["scenes"][scene_path] = scenes
     return scenes
@@ -584,20 +2765,16 @@ def get_cached_scenes():
 
 # 컷 목록을 캐시에서 가져오거나, 없으면 로드
 def get_cached_cuts(scene_number):
-    base_path = get_project_paths()
-    cut_path = os.path.join(base_path, "scenes", scene_number)
+    cut_path = get_scene_path(scene_number)
     if cut_path in cache["cuts"]:
         return cache["cuts"][cut_path]
-
-    cuts = []
-    if os.path.exists(cut_path):
-        for cut in sorted(os.listdir(cut_path)):
-            if (
-                os.path.isdir(os.path.join(cut_path, cut)) and
-                not cut.startswith('.') and
-                not cut.startswith('_')
-            ):
-                cuts.append((cut, cut, ""))
+    secondary_level = get_schema_secondary_level()
+    if not secondary_level:
+        cuts = [(scene_number, scene_number, "")] if scene_number else [("NO_CUTS", "No Cuts", "No cuts available")]
+    else:
+        cuts = list_browser_child_dirs(cut_path)
+        if not cuts:
+            cuts = [("NO_CUTS", "No Cuts", "No cuts available")]
 
     cache["cuts"][cut_path] = cuts
     return cuts
@@ -607,33 +2784,26 @@ def is_valid_folder(name):
     return not (name.startswith('_') or 'omit' in name.lower() or '-' in name)
 
 def get_scene_numbers(self, context):
-    base_path = get_project_paths()
-    scene_path = os.path.join(base_path, "scenes")
+    scene_path = get_scene_root_path()
 
-    # 파일 경로가 없는 경우 기본값 반환
     if not os.path.exists(scene_path):
         return [("NO_FILE", "No File", "No file found")]
 
-    items = []
-    for scene in sorted(os.listdir(scene_path)):
-        if os.path.isdir(os.path.join(scene_path, scene)) and is_valid_folder(scene):
-            items.append((scene, scene, ""))
-
+    items = list_browser_child_dirs(scene_path)
     return items if items else [("NO_SCENES", "No Scenes", "No scenes available")]
 
 def get_cut_numbers(self, context):
     scene_number = context.scene.my_tool.scene_number
-    base_path = get_project_paths()
-    cut_path = os.path.join(base_path, "scenes", scene_number)
+    secondary_level = get_schema_secondary_level()
+    if not secondary_level:
+        return [(scene_number, scene_number, "")] if scene_number else [("NO_CUTS", "No Cuts", "No cuts available")]
+
+    cut_path = get_scene_path(scene_number)
 
     if not os.path.exists(cut_path):
         return [("NO_FILE", "No File", "No cuts found")]
 
-    items = []
-    for cut in sorted(os.listdir(cut_path)):
-        if os.path.isdir(os.path.join(cut_path, cut)) and is_valid_folder(cut):
-            items.append((cut, cut, ""))
-
+    items = list_browser_child_dirs(cut_path)
     return items if items else [("NO_CUTS", "No Cuts", "No cuts available")]
 
 
@@ -642,31 +2812,84 @@ def get_cut_numbers(self, context):
 def get_blend_files(self, context):
     scene_number = context.scene.my_tool.scene_number
     cut_number = context.scene.my_tool.cut_number
-    base_path = get_project_paths()
     project_prefix = get_project_prefix()
-    blend_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren")
-    if not os.path.exists(blend_path):
-        return []
-
+    valid_extensions = set(get_project_browser_file_extensions())
     files_with_time = []
-    for file in os.listdir(blend_path):
-        if file.endswith('.blend'):
+    for work_dir_name, blend_path in get_scene_work_paths(scene_number, cut_number):
+        if not os.path.exists(blend_path):
+            continue
+        for file in os.listdir(blend_path):
+            extension = os.path.splitext(file)[1].lower()
+            if extension not in valid_extensions:
+                continue
             full_path = os.path.join(blend_path, file)
             modified_time = os.path.getmtime(full_path)
-            files_with_time.append((file, modified_time))
+            files_with_time.append((work_dir_name, file, modified_time))
 
     # 파일을 수정된 시간에 따라 내림차순으로 정렬
-    sorted_files = sorted(files_with_time, key=itemgetter(1), reverse=True)
+    sorted_files = sorted(files_with_time, key=itemgetter(2), reverse=True)
     
     # 파일 이름만 EnumProperty에 넣기
     items = []
-    for file, _ in sorted_files:
-        file = file.replace(f"{project_prefix}_{scene_number}_{cut_number}_ren_", "")
-        file = os.path.splitext(file)[0]
-        items.append((file, file, ""))
-    return items
+    for work_dir_name, file, _ in sorted_files:
+        stripped = file
+        for token in get_scene_work_dir_names():
+            stripped = stripped.replace(f"{project_prefix}_{scene_number}_{cut_number}_{token}_", "")
+            stripped = stripped.replace(f"{project_prefix}_{scene_number}_{token}_", "")
+        stripped = os.path.splitext(stripped)[0]
+        identifier = build_blend_file_identifier(work_dir_name, file)
+        work_label = "" if str(work_dir_name or "") in (".", "./", "\\") else f"{work_dir_name} | "
+        items.append((identifier, f"{work_label}{stripped}", file))
+    return items if items else [("NO_FILES", "No Files", "No files available")]
+
+
+def get_browser_level_3_items(self, context):
+    items = get_browser_level_items(3, context)
+    return items if items else [("NO_LEVEL3", "No Items", "No items available")]
+
+
+def get_browser_level_4_items(self, context):
+    items = get_browser_level_items(4, context)
+    return items if items else [("NO_LEVEL4", "No Items", "No items available")]
+
+
+def get_browser_level_5_items(self, context):
+    items = get_browser_level_items(5, context)
+    return items if items else [("NO_LEVEL5", "No Items", "No items available")]
+
+
+def find_blend_file_enum_value(scene_number, cut_number, filepath, context):
+    target_path = os.path.abspath(filepath)
+    items = get_blend_files(getattr(context.scene, "my_tool", None), context)
+    for identifier, _label, _desc in items:
+        candidate = resolve_selected_blend_filepath(scene_number, cut_number, identifier)
+        if candidate and os.path.abspath(candidate) == target_path:
+            return identifier
+    return ""
     
 # Open 버튼에 연결할 함수
+def read_blend_file_version(filepath):
+    try:
+        with open(filepath, "rb") as handle:
+            header = handle.read(12)
+        if len(header) < 12 or not header.startswith(b"BLENDER"):
+            return None
+        version_text = header[9:12].decode("ascii", errors="ignore")
+        if not version_text.isdigit():
+            return None
+        return (int(version_text[0]), int(version_text[1:]), 0)
+    except Exception:
+        return None
+
+
+def is_blend_file_newer_than_current(filepath):
+    file_version = read_blend_file_version(filepath)
+    if not file_version:
+        return False, None
+    current_version = tuple(int(v) for v in bpy.app.version[:3])
+    return file_version > current_version, file_version
+
+
 class OpenFileOperator(bpy.types.Operator):
     bl_idname = "file.open_file"
     bl_label = "Open File"
@@ -679,10 +2902,34 @@ class OpenFileOperator(bpy.types.Operator):
         scene_number = context.scene.my_tool.scene_number
         cut_number = context.scene.my_tool.cut_number
         blend_file = context.scene.my_tool.blend_file
-        base_path = get_project_paths()
-        project_prefix = get_project_prefix()
-        file_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", f"{project_prefix}_{scene_number}_{cut_number}_ren_{blend_file}.blend")
-        bpy.ops.wm.open_mainfile(filepath=file_path)
+        file_path = resolve_selected_blend_filepath(scene_number, cut_number, blend_file)
+        if not file_path:
+            self.report({'ERROR'}, f"Blend file not found for selection: {blend_file}")
+            return {'CANCELLED'}
+        extension = os.path.splitext(file_path)[1].lower()
+        if extension == ".blend":
+            _pending_browser_focus_filepath = file_path
+            is_newer, file_version = is_blend_file_newer_than_current(file_path)
+            if is_newer and file_version:
+                _pending_browser_focus_filepath = ""
+                current_label = ".".join(str(v) for v in bpy.app.version[:2])
+                file_label = f"{file_version[0]}.{file_version[1]}"
+                self.report(
+                    {'ERROR'},
+                    f"This blend file was saved in Blender {file_label} and cannot be opened in Blender {current_label}."
+                )
+                return {'CANCELLED'}
+            try:
+                bpy.ops.wm.open_mainfile(filepath=file_path)
+                return {'FINISHED'}
+            except RuntimeError as exc:
+                _pending_browser_focus_filepath = ""
+                self.report({'ERROR'}, f"Failed to open blend file: {exc}")
+                return {'CANCELLED'}
+        else:
+            open_folder(file_path)
+            self.report({'INFO'}, f"Opened external scene file: {os.path.basename(file_path)}")
+            return {'FINISHED'}
 
         # 파일 경로에서 씬과 컷 번호 추출
         scene_number, cut_number = extract_scene_cut_from_filename(file_path)
@@ -706,9 +2953,10 @@ class AppendSceneOperator(bpy.types.Operator):
         scene_number = context.scene.my_tool.scene_number
         cut_number = context.scene.my_tool.cut_number
         blend_file = context.scene.my_tool.blend_file
-        base_path = get_project_paths()
-        project_prefix = get_project_prefix()
-        self.asset_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", f"{project_prefix}_{scene_number}_{cut_number}_ren_{blend_file}.blend")
+        self.asset_path = resolve_selected_blend_filepath(scene_number, cut_number, blend_file)
+        if not self.asset_path:
+            self.report({'ERROR'}, f"Blend file not found for selection: {blend_file}")
+            return {'CANCELLED'}
         # 선택한 어셋 파일 내의 모든 씬을 가져옵니다.
         with bpy.data.libraries.load(self.asset_path, link=False) as (data_from, data_to):
             data_to.scenes = data_from.scenes
@@ -720,13 +2968,12 @@ class SF_OT_RefreshSceneAndCutCache(bpy.types.Operator):
     bl_label = "🔁 Refresh Scenes & Cuts"
 
     def execute(self, context):
-        base_path = get_project_paths()
-        scene_path = os.path.join(base_path, "scenes")
+        scene_path = get_scene_root_path()
         cache["scenes"].pop(scene_path, None)
 
         scene_number = context.scene.my_tool.scene_number
         if scene_number:
-            cut_path = os.path.join(base_path, "scenes", scene_number)
+            cut_path = get_scene_path(scene_number)
             cache["cuts"].pop(cut_path, None)
             self.report({'INFO'}, f"Refreshed cache for scenes and cuts of scene {scene_number}")
         else:
@@ -735,16 +2982,28 @@ class SF_OT_RefreshSceneAndCutCache(bpy.types.Operator):
         return {'FINISHED'}
 
 def update_scene_number(self, context):
-    set_blend_file_to_first_available(context)
     context.scene.sf_scene_number = self.scene_number
-    save_recent_browser_state(context)
+    update_browser_hierarchy(context, 1)
 
 def update_cut_number(self, context):
-    set_blend_file_to_first_available(context)
     context.scene.sf_cut_number = self.cut_number
-    save_recent_browser_state(context)
+    update_browser_hierarchy(context, 2)
+
+
+def update_browser_level_3(self, context):
+    update_browser_hierarchy(context, 3)
+
+
+def update_browser_level_4(self, context):
+    update_browser_hierarchy(context, 4)
+
+
+def update_browser_level_5(self, context):
+    update_browser_hierarchy(context, 5)
 
 def update_blend_file(self, context):
+    if _browser_sync_suspended:
+        return
     save_recent_browser_state(context)
 
 class MyProperties(bpy.types.PropertyGroup):
@@ -760,6 +3019,27 @@ class MyProperties(bpy.types.PropertyGroup):
         description="Choose a Cut Number",
         items=lambda self, context: get_cached_cuts(context.scene.my_tool.scene_number),
         update=update_cut_number
+    )
+
+    browser_level_3: bpy.props.EnumProperty(
+        name="Level 3",
+        description="Choose a third browser level",
+        items=get_browser_level_3_items,
+        update=update_browser_level_3
+    )
+
+    browser_level_4: bpy.props.EnumProperty(
+        name="Level 4",
+        description="Choose a fourth browser level",
+        items=get_browser_level_4_items,
+        update=update_browser_level_4
+    )
+
+    browser_level_5: bpy.props.EnumProperty(
+        name="Level 5",
+        description="Choose a fifth browser level",
+        items=get_browser_level_5_items,
+        update=update_browser_level_5
     )
 
 
@@ -1087,16 +3367,12 @@ def set_nested_property(target_obj, key_path, value):
 
 def load_project_render_settings(context, apply_render_settings=True, apply_view_layer_settings=True):
     scene = context.scene
-    
-    # 1. JSON 파일 경로 찾기 (기존 함수 get_project_paths 사용)
-    base_path = get_project_paths() # 예: T:\
-    
-    # 경로가 없으면 중단
-    if not base_path:
+
+    json_path = get_project_json_path("renderSetting.json")
+
+    if not json_path:
         print("[WARN] 프로젝트 경로를 찾을 수 없습니다.")
         return False
-
-    json_path = os.path.join(base_path, "_json", "renderSetting.json")
     
     if not os.path.exists(json_path):
         print(f"[WARN] 렌더 세팅 파일 없음: {json_path}")
@@ -1195,8 +3471,7 @@ def get_base_filepath(scene):
     my_tool = scene.my_tool
     scene_number = my_tool.scene_number
     cut_number = my_tool.cut_number
-    base_path1 = get_project_paths()
-    base_path = os.path.join(base_path1, "output", "ren", scene_number, f"{scene_number}_{cut_number}")
+    base_path = get_project_output_path(scene_number, cut_number)
     default_version = "v001"
 
     # 해당 경로에 있는 모든 버전 넘버 찾기
@@ -1283,10 +3558,7 @@ def set_and_restore_view_layer_properties(context, scene, view_layer, collection
     context.window.view_layer = current_view_layer
     
 def get_project_settings_path():
-    # 프로젝트 설정에 따라 경로 가져오기
-    base_path = get_project_paths()
-    settings_path = os.path.join(base_path, "_json", "renderSetting.json")
-    return settings_path
+    return get_project_json_path("renderSetting.json")
 
 def load_settings():
     settings_path = get_project_settings_path()
@@ -1450,6 +3722,7 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
         scene_number = my_tool.scene_number
         cut_number = my_tool.cut_number
         project_prefix = get_project_prefix()
+        project_name = get_current_project_name()
         scene.name = f"{project_prefix}_{scene_number}_{cut_number}"
 
         if "Collection" in bpy.data.collections:
@@ -1499,9 +3772,11 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
             pass
 
     def apply_scene_resolution(self, scene, project_prefix, scene_number, cut_number):
-        base_path = get_project_paths()
-        json_file_name = f"{project_prefix}_{scene_number}_{cut_number}_camera_data.json"
-        full_json_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache", json_file_name)
+        cache_context = resolve_cache_context(scene_number, cut_number, bpy.context, get_current_project_name())
+        scene_token = cache_context["scene_token"] or scene_number
+        cut_token = cache_context["cut_token"] or cut_number
+        json_file_name = f"{project_prefix}_{scene_token}_{cut_token}_camera_data.json"
+        full_json_path = os.path.join(cache_context["cache_dir"], json_file_name)
 
         camera_data = {}
         if os.path.exists(full_json_path):
@@ -1537,9 +3812,7 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
         scene.render.resolution_y = final_h
 
     def get_project_settings_path(self):
-        base_path = get_project_paths()
-        settings_path = os.path.join(base_path, "_json", "renderSetting.json")
-        return settings_path
+        return get_project_json_path("renderSetting.json")
 
     def load_settings(self):
         settings_path = self.get_project_settings_path()
@@ -1547,10 +3820,10 @@ class SF_OT_BuildSceneOperator(bpy.types.Operator):
             with open(settings_path, 'r') as file:
                 return json.load(file)
         except FileNotFoundError:
-            self.report({'ERROR'}, "?? ??? ?? ? ????.")
+            self.report({'WARNING'}, f"renderSetting.json 없음, 기본 설정으로 진행합니다: {settings_path}")
             return {}
         except json.JSONDecodeError:
-            self.report({'ERROR'}, "?? ?? ??? ???????.")
+            self.report({'WARNING'}, f"renderSetting.json 형식이 잘못되어 기본 설정으로 진행합니다: {settings_path}")
             return {}
 
     def clear_all_nodes(self, node_tree):
@@ -1671,7 +3944,8 @@ class SF_OT_GenerateOperator(bpy.types.Operator):
 
     def execute(self, context):
         scene = context.scene
-        project_prefix = get_project_prefix()
+        project_name = get_current_project_name()
+        project_prefix = get_project_prefix(project_name)
         
         # 1. 씬/컷 번호 가져오기
         scene_number = scene.my_tool.scene_number
@@ -1679,14 +3953,14 @@ class SF_OT_GenerateOperator(bpy.types.Operator):
 
         # 2. 프로젝트별 올바른 경로 가져오기 (이 부분이 핵심 수정 사항)
         # 기존: get_usd_path()가 S드라이브를 강제하던 문제 해결
-        base_path = get_project_paths()  # 예: "T:\" for THE_TRAP
+        base_path = get_project_paths(project_name)  # 예: "T:\" for THE_TRAP
         if not base_path:
             self.report({'ERROR'}, "Project Path를 찾을 수 없습니다. Project 설정을 확인하세요.")
             return {'CANCELLED'}
 
         # 3. 실제 캐시 디렉토리 구성
         # 경로: T:\scenes\0010\0010\ren\cache
-        cache_dir = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache")
+        cache_dir = resolve_cache_context(scene_number, cut_number, context, project_name)["cache_dir"]
 
         if not os.path.exists(cache_dir):
             self.report({'WARNING'}, f"Cache 폴더가 없습니다: {cache_dir}")
@@ -1800,18 +4074,18 @@ class SF_OT_LinkSelectedOperator(bpy.types.Operator):
                     self.apply_cache_to_mesh(obj, asset_name, scene_number, cut_number, category_name)
 
     def get_cache_file_path(self, asset_name, scene_number, cut_number, context):
-        scene = context.scene
-        base_path = get_project_paths()
         category_name = self.get_category_name(asset_name)
+        project_name = get_current_project_name()
+        return get_usd_path(scene_number, cut_number, asset_name, project_name, category_name)
         project_prefix = get_project_prefix()  # 현재 프로젝트의 식별자를 얻습니다.
         cache_file_format = f"{project_prefix}_{scene_number}_{cut_number}_{category_name}_{asset_name}.usd"
 
-        return os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache", cache_file_format)
+        return os.path.join(get_cache_path(scene_number, cut_number), cache_file_format)
 
 
     def import_and_remove_usd(self, file_path):
         # USD 파일 임포트
-        bpy.ops.wm.usd_import(filepath=file_path, relative_path=True, import_meshes=False, import_subdiv=False, set_frame_range=False)
+        safe_usd_import(filepath=file_path, relative_path=True, import_meshes=False, import_subdiv=False, set_frame_range=False)
         # 임포트된 모든 객체를 확인
         imported_objects = bpy.context.selected_objects
 
@@ -2320,7 +4594,8 @@ class LinkClass(bpy.types.Operator):
                 property_manager.update(min=min_val, max=max_val, soft_min=soft_min, soft_max=soft_max, subtype='NONE', default=default)
 
     def get_blend_file_path(self, asset_name, category_name, scene_number, cut_number):
-        base_path = get_project_paths()
+        project_name = get_current_project_name()
+        base_path = get_project_paths(project_name)
         return os.path.join(base_path, "assets", category_name, asset_name, "mod", f"{asset_name}.blend")
 
 
@@ -3401,7 +5676,8 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
     # -------------------------------------------------------------------
     def execute_append_mode(self, context, selected_items):
         scene = context.scene
-        base_path = get_project_paths()
+        project_name = get_current_project_name()
+        base_path = get_project_paths(project_name)
         scene_num = scene.my_tool.scene_number
         cut_num = scene.my_tool.cut_number
         
@@ -3416,15 +5692,15 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
         for category, item in selected_items:
             # ch 카테고리는 Subdivision 적용 등 특수 로직이 있어서 구분
             is_ch = (category.name == "ch")
-            self.process_selected_item_append(item, category, f"{category.name}_col", base_path, scene_num, cut_num, context, apply_subdivision=is_ch)
+            self.process_selected_item_append(item, category, f"{category.name}_col", base_path, scene_num, cut_num, context, apply_subdivision=is_ch, project_name=project_name)
 
-    def process_selected_item_append(self, item, category, category_col_name, base_path, scene_number, cut_number, context, apply_subdivision):
+    def process_selected_item_append(self, item, category, category_col_name, base_path, scene_number, cut_number, context, apply_subdivision, project_name=None):
         import os
         asset_name = item.name
         asset_col_name = f"{asset_name}_col"
         
         # 캐시 디렉토리 경로 구성
-        directory = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache")
+        directory = resolve_cache_context(scene_number, cut_number, context, project_name)["cache_dir"]
         
         # 디렉토리 존재 여부 확인
         if not os.path.exists(directory):
@@ -3440,15 +5716,19 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
 
         print(f"[SF Import] Found USD: {asset_file_path}")
 
-        # 블렌드 파일(머티리얼용) 찾기 및 Append
-        blend_file_path = self.get_blend_file_path(base_path, category.name, asset_name)
-        if blend_file_path and os.path.exists(blend_file_path):
-            self.append_materials_from_blend(blend_file_path, asset_name, category.name)
-        else:
-            print(f"[SF Import] Published Blend not found: {blend_file_path}")
+        blend_file_path = self.get_blend_file_path(base_path, category.name, asset_name, project_name=project_name)
+        if not blend_file_path or not os.path.exists(blend_file_path):
+            self.report({'WARNING'}, f"Published Blend not found: {asset_name}\nPath: {blend_file_path}")
+            return
 
-        # USD 임포트 실행
-        self.import_asset_from_usd(asset_file_path, category_col_name, asset_col_name, category.name, context) 
+        append_published_asset_with_cache(
+            blend_file_path,
+            category.name,
+            asset_name,
+            context,
+            usd_path=asset_file_path,
+            usd_file_name=os.path.basename(asset_file_path),
+        )
         
         # 후처리
         bpy.ops.sf.cleanup_orphans_combined1()
@@ -3468,7 +5748,7 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
         except OSError:
             print(f"[SF Import Warning] Failed to load library: {blend_file_path}")
 
-    def import_asset_from_usd(self, asset_file_path, category_col_name, asset_col_name, category_name, context):
+    def import_asset_from_usd(self, asset_file_path, category_col_name, asset_col_name, category_name, asset_name, context):
         # 컬렉션 구조 생성
         if category_col_name not in bpy.context.scene.collection.children:
             new_category_col = bpy.data.collections.new(category_col_name)
@@ -3500,7 +5780,7 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
                 context.view_layer.active_layer_collection = asset_lc
 
         # 실제 임포트 수행
-        bpy.ops.wm.usd_import(filepath=asset_file_path, relative_path=True, import_subdiv=False, set_frame_range=False)
+        safe_usd_import(filepath=asset_file_path, relative_path=True, import_subdiv=False, set_frame_range=False)
         
         # 임포트 후 스케일 조정 및 머티리얼 적용
         for obj in asset_col.objects:
@@ -3508,6 +5788,18 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
                 # USD 임포트 시 스케일이 100배 큰 경우가 많아 0.01로 줄임 (파이프라인 규칙인듯)
                 obj.scale = (0.01, 0.01, 0.01)
             apply_matching_materials(obj)
+
+        try:
+            apply_cache_to_asset_geometry(
+                asset_col,
+                asset_name,
+                asset_file_path,
+                os.path.basename(asset_file_path),
+                create_modifier=False,
+                create_cache_file=False,
+            )
+        except Exception as e:
+            print(f"[SF Import][WARN] Failed to auto-bind cache after USD import: {e}")
 
     # -------------------------------------------------------------------
     # ▼ [모드 2] Link 방식
@@ -3577,7 +5869,7 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
     # -------------------------------------------------------------------
     # ▼ 공용 헬퍼
     # -------------------------------------------------------------------
-    def get_blend_file_path(self, base_path, category_name, asset_name):
+    def get_blend_file_path(self, base_path, category_name, asset_name, project_name=None):
         import os
         # 일반 경로
         # category_name이 'ch'나 'bg' 등을 포함하는지 확인
@@ -3586,7 +5878,7 @@ class SF_OT_ImportSelectedOperator(bpy.types.Operator):
         elif "bg" in category_name: folder = "bg"
         elif "prop" in category_name: folder = "prop"
         
-        return os.path.join(base_path, "assets", folder, asset_name, "mod", f"{asset_name}.blend")
+        return get_asset_blend_path(category_name, asset_name, project_name)
 
     # (이하 apply_light_mask 등 메서드는 기존 코드의 로직이 길어서 생략했습니다. 
     #  클래스 내부에 `apply_light_mask_to_collection` 과 `apply_subdivision_to_meshes` 메서드가 
@@ -4000,7 +6292,7 @@ class SF_OT_ApplyLineArt(bpy.types.Operator):
                 return {'CANCELLED'}
 
             # 파일 경로를 사용하여 어셋 임포트
-            bpy.ops.wm.usd_import(filepath=asset_file_path, relative_path=True, import_subdiv=False, set_frame_range=False)
+            safe_usd_import(filepath=asset_file_path, relative_path=True, import_subdiv=False, set_frame_range=False)
 
             # 임포트된 어셋 중 루트 객체의 스케일 조정 및 머티리얼 적용
             for obj in asset_col.objects:
@@ -4213,28 +6505,70 @@ class SF_OT_ImportSceneCameraOperator(bpy.types.Operator):
         my_tool = scene.my_tool
         scene_number = my_tool.scene_number
         cut_number = my_tool.cut_number
-        base_path = get_project_paths()
-        project_prefix = get_project_prefix()
+        project_name = get_current_project_name()
+        project_prefix = get_project_prefix(project_name)
+        cache_context = resolve_cache_context(scene_number, cut_number, context, project_name)
+        cache_dir = cache_context["cache_dir"]
+        scene_token = cache_context["scene_token"]
+        cut_token = cache_context["cut_token"]
 
         # 카메라 이름
-        camera_name = f"{project_prefix}_{scene_number}_{cut_number}_cam"
+        name_candidates = []
+        for scene_candidate, cut_candidate in (
+            (scene_number, cut_number),
+            (scene_token, cut_token),
+        ):
+            scene_text = str(scene_candidate or "").strip()
+            cut_text = str(cut_candidate or "").strip()
+            if not scene_text or not cut_text:
+                continue
+            candidate = (
+                f"{project_prefix}_{scene_text}_{cut_text}_cam",
+                f"{project_prefix}_{scene_text}_{cut_text}_camera_data.json",
+                f"{project_prefix}_cam_{scene_text}_{cut_text}",
+            )
+            if candidate not in name_candidates:
+                name_candidates.append(candidate)
+
+        cut_folder_text = str(cut_number or "").strip()
+        if "_" in cut_folder_text:
+            cut_parts = [part.strip() for part in cut_folder_text.split("_") if part.strip()]
+            if len(cut_parts) >= 2:
+                scene_text = cut_parts[0]
+                cut_text = "_".join(cut_parts[1:])
+                candidate = (
+                    f"{project_prefix}_{scene_text}_{cut_text}_cam",
+                    f"{project_prefix}_{scene_text}_{cut_text}_camera_data.json",
+                    f"{project_prefix}_cam_{scene_text}_{cut_text}",
+                )
+                if candidate not in name_candidates:
+                    name_candidates.append(candidate)
+
+        camera_name = ""
+        json_file_name = ""
+        camera_name_scene = ""
+        camera_file_path = ""
+        full_json_path = ""
+
+        for camera_name_candidate, json_name_candidate, scene_camera_candidate in name_candidates:
+            candidate_camera_path = os.path.join(cache_dir, f"{camera_name_candidate}.fbx")
+            candidate_json_path = os.path.join(cache_dir, json_name_candidate)
+            if os.path.exists(candidate_camera_path) or os.path.exists(candidate_json_path):
+                camera_name = camera_name_candidate
+                json_file_name = json_name_candidate
+                camera_name_scene = scene_camera_candidate
+                camera_file_path = candidate_camera_path
+                full_json_path = candidate_json_path
+                break
+
+        if not camera_file_path and name_candidates:
+            camera_name, json_file_name, camera_name_scene = name_candidates[0]
+            camera_file_path = os.path.join(cache_dir, f"{camera_name}.fbx")
+            full_json_path = os.path.join(cache_dir, json_file_name)
+
         print(f"Camera file name: {camera_name}")
-
-        # FBX 경로
-        camera_file_path = os.path.join(
-            base_path, "scenes", scene_number, cut_number, "ren", "cache", f"{camera_name}.fbx"
-        )
         print(f"Camera file path: {camera_file_path}")
-
-        # JSON 경로
-        json_file_name = f"{project_prefix}_{scene_number}_{cut_number}_camera_data.json"
-        full_json_path = os.path.join(
-            base_path, "scenes", scene_number, cut_number, "ren", "cache", json_file_name
-        )
         print(f"JSON file path: {full_json_path}")
-
-        # 씬 내 카메라 이름
-        camera_name_scene = f"{project_prefix}_cam_{scene_number}_{cut_number}"
         print(f"Scene camera name: {camera_name_scene}")
 
         # 기존 카메라 삭제
@@ -4252,8 +6586,14 @@ class SF_OT_ImportSceneCameraOperator(bpy.types.Operator):
                 bpy.data.objects.remove(obj, do_unlink=True)
 
             # 카메라 속성 세팅
-            camera = bpy.data.objects.get(camera_name_scene)
+            imported_cameras = [obj for obj in bpy.context.selected_objects if obj.type == 'CAMERA']
+            if imported_cameras:
+                camera = imported_cameras[0]
+                camera.name = camera_name_scene
+            else:
+                camera = bpy.data.objects.get(camera_name_scene)
             if camera is not None:
+                scene.camera = camera
                 camera.data.passepartout_alpha = 1
                 camera.data.clip_start = 0.05
                 camera.data.clip_end = 50
@@ -4301,7 +6641,8 @@ class SF_OT_ImportSceneCameraOperator(bpy.types.Operator):
                 return {'FINISHED'}
 
         else:
-            self.report({'WARNING'}, "Camera file not found.")
+            tried_paths = ", ".join(os.path.join(cache_dir, f"{candidate[0]}.fbx") for candidate in name_candidates)
+            self.report({'WARNING'}, f"Camera file not found: {camera_file_path} | tried: {tried_paths}")
 
         return {'FINISHED'}
 
@@ -4335,7 +6676,12 @@ def _get_modifier_cache_object_paths(mod):
         return []
 
     try:
-        return [p.path for p in cf.object_paths if getattr(p, 'path', None)]
+        paths = []
+        for p in cf.object_paths:
+            value = getattr(p, 'path', None) or getattr(p, 'object_path', None) or getattr(p, 'name', None)
+            if value:
+                paths.append(str(value))
+        return paths
     except Exception:
         return []
 
@@ -4344,20 +6690,28 @@ def _cache_path_leaf(path):
     return path.rstrip('/').split('/')[-1]
 
 
-def _rank_cache_object_path(path, asset_name=None):
-    """Lower score is better. Prefer real geo object prims over look/material paths."""
-    score = 100
+def _normalize_cache_name_token(value):
+    token = str(value or "").split(".")[0].strip().lower()
+    token = re.sub(r'^(msh_|geo_|mesh_)', '', token)
+    token = re.sub(r'(_geo)+$', '_geo', token)
+    token = re.sub(r'(_mesh)+$', '_mesh', token)
+    token = re.sub(r'[^a-z0-9_]+', '', token)
+    return token
 
+
+def _rank_cache_object_path(path, asset_name=None):
+    """Lower score is better. Prefer the shallowest valid prim path."""
     normalized = path.rstrip('/')
+    depth = normalized.count('/')
+    score = depth
+
     if '/Looks/' in normalized:
         score += 1000
     if '/geo/' in normalized:
-        score -= 50
+        score += 10
     if asset_name and f'/{asset_name}/geo/' in normalized:
-        score -= 25
+        score += 5
 
-    depth = normalized.count('/')
-    score += depth
     return score
 
 
@@ -4368,6 +6722,7 @@ def _find_best_cache_object_path(mod, obj_name, asset_name=None):
     """
     base_name = obj_name.split('.')[0]
     base_name_l = base_name.lower()
+    normalized_base = _normalize_cache_name_token(base_name)
     paths = _get_modifier_cache_object_paths(mod)
     if not paths:
         return None
@@ -4382,16 +6737,20 @@ def _find_best_cache_object_path(mod, obj_name, asset_name=None):
     if exact_ci:
         return sorted(exact_ci, key=lambda p: _rank_cache_object_path(p, asset_name))[0]
 
-    # 3) Very loose fallback for naming drift, still choosing from existing cache paths only
-    loose = []
-    for p in paths:
-        leaf = _cache_path_leaf(p)
-        leaf_l = leaf.lower()
-        if leaf_l.endswith(base_name_l) or base_name_l.endswith(leaf_l):
-            loose.append(p)
+    # 3) Normalized leaf-name match for naming drift like jaw_geo_geo <-> jaw_geo
+    normalized = [p for p in paths if _normalize_cache_name_token(_cache_path_leaf(p)) == normalized_base]
+    if normalized:
+        return sorted(normalized, key=lambda p: _rank_cache_object_path(p, asset_name))[0]
 
-    if loose:
-        return sorted(loose, key=lambda p: _rank_cache_object_path(p, asset_name))[0]
+    # 4) Any path segment match, still preferring the shallowest valid prim path
+    segment_matches = []
+    for p in paths:
+        segments = [_normalize_cache_name_token(part) for part in str(p).split('/') if part]
+        if normalized_base and normalized_base in segments:
+            segment_matches.append(p)
+
+    if segment_matches:
+        return sorted(segment_matches, key=lambda p: _rank_cache_object_path(p, asset_name))[0]
 
     return None
 
@@ -4409,6 +6768,303 @@ def _sync_modifier_object_path_from_cache(mod, obj_name, asset_name=None):
     if old_path != found_path:
         mod.object_path = found_path
     return True, old_path, found_path
+
+
+def _get_name_base(value):
+    if hasattr(value, "name"):
+        value = value.name
+    return str(value or "").split(".")[0]
+
+
+def _iter_object_tree(root_obj):
+    yield root_obj
+    for child in getattr(root_obj, "children", []):
+        yield from _iter_object_tree(child)
+
+
+def _find_child_object_by_base_name(parent_obj, target_name):
+    target_base = _get_name_base(target_name).lower()
+    for child in getattr(parent_obj, "children", []):
+        if _get_name_base(child).lower() == target_base:
+            return child
+    return None
+
+
+def resolve_asset_geometry_root(collection, asset_name):
+    if not collection:
+        return None
+
+    asset_base = _get_name_base(asset_name).lower()
+
+    for obj in collection.all_objects:
+        try:
+            if obj.get("rr_role") == "geometry_root" and str(obj.get("rr_asset", "")).lower() == asset_base:
+                return obj
+        except Exception:
+            pass
+
+    top_level_asset_root = None
+    for obj in collection.objects:
+        if _get_name_base(obj).lower() == asset_base:
+            top_level_asset_root = obj
+            break
+
+    if not top_level_asset_root:
+        return None
+
+    geometry_node = None
+    for child in top_level_asset_root.children:
+        child_base = _get_name_base(child).lower()
+        if child_base in {"geometry", "geo"}:
+            geometry_node = child
+            break
+
+    if not geometry_node:
+        return None
+
+    inner_asset_root = _find_child_object_by_base_name(geometry_node, asset_name)
+    target_root = inner_asset_root or geometry_node
+
+    try:
+        target_root["rr_role"] = "geometry_root"
+        target_root["rr_asset"] = _get_name_base(asset_name)
+    except Exception:
+        pass
+
+    return target_root
+
+
+def iter_asset_geometry_meshes(collection, asset_name):
+    geometry_root = resolve_asset_geometry_root(collection, asset_name)
+    if geometry_root:
+        yielded = False
+        for obj in _iter_object_tree(geometry_root):
+            if getattr(obj, "type", None) == 'MESH':
+                yielded = True
+                yield obj
+        if yielded:
+            return
+
+    for obj in collection.all_objects:
+        if getattr(obj, "type", None) == 'MESH':
+            yield obj
+
+
+def ensure_mesh_sequence_cache_binding(obj, usd_path, usd_file_name, asset_name=None, create_modifier=False, create_cache_file=False):
+    if getattr(obj, "type", None) != 'MESH':
+        return None, None
+
+    mod = next((m for m in obj.modifiers if m.type == 'MESH_SEQUENCE_CACHE'), None)
+    if not mod and create_modifier:
+        try:
+            mod = obj.modifiers.new(name="MeshSequenceCache", type='MESH_SEQUENCE_CACHE')
+            print(f"[MSC] Created MeshSequenceCache on {obj.name}")
+        except Exception as e:
+            print(f"[MSC][WARN] Failed to create modifier on {obj.name}: {e}")
+            return None, None
+
+    if not mod:
+        return None, None
+
+    cache_file = getattr(mod, "cache_file", None)
+    unique_name = f"{usd_file_name}_{obj.name}"
+    fallback_cache_name = getattr(cache_file, "name", None) or usd_file_name
+    if cache_file is None:
+        if not create_cache_file:
+            return mod, None
+        cache_file = get_or_create_cache_file(unique_name, usd_path, fallback_name=usd_file_name, log_name=obj.name)
+    elif _cache_file_needs_refresh(cache_file, usd_path):
+        cache_file = _refresh_modifier_cache_file(
+            mod,
+            usd_path,
+            unique_name,
+            fallback_name=fallback_cache_name,
+            log_name=obj.name,
+        ) or cache_file
+
+    if not cache_file:
+        return mod, None
+
+    try:
+        cache_file.name = unique_name
+    except Exception:
+        pass
+    cache_file.filepath = usd_path
+    mod.cache_file = cache_file
+
+    try:
+        mod.read_data = {'VERT', 'UV', 'COLOR'}
+    except Exception:
+        pass
+
+    try:
+        matched, old_path, new_path = _sync_modifier_object_path_from_cache(mod, obj.name, asset_name=asset_name)
+        if not matched:
+            print(f"[MSC][WARN] Prim Path fallback failed: {obj.name} | keeping {old_path}")
+    except Exception as e:
+        print(f"[MSC][WARN] Prim Path sync failed: {obj.name} ({e})")
+
+    return mod, cache_file
+
+
+def get_or_create_cache_file(name, usd_path, fallback_name=None, log_name=None):
+    cache_file = bpy.data.cache_files.get(name)
+    if cache_file:
+        cache_file.filepath = usd_path
+        return cache_file
+
+    if fallback_name:
+        cache_file = bpy.data.cache_files.get(fallback_name)
+        if cache_file:
+            cache_file.filepath = usd_path
+            try:
+                cache_file.name = name
+            except Exception:
+                pass
+            return cache_file
+
+    load_fn = getattr(bpy.data.cache_files, "load", None)
+    if callable(load_fn):
+        try:
+            cache_file = load_fn(usd_path)
+        except RuntimeError:
+            cache_file = bpy.data.cache_files.get(fallback_name) if fallback_name else None
+        except Exception as e:
+            print(f"[MSC][WARN] Failed to load cache file for {log_name or name}: {e}")
+            cache_file = None
+        if cache_file:
+            try:
+                cache_file.name = name
+            except Exception:
+                pass
+            cache_file.filepath = usd_path
+            return cache_file
+
+    new_fn = getattr(bpy.data.cache_files, "new", None)
+    if callable(new_fn):
+        try:
+            cache_file = new_fn(name=name)
+            cache_file.filepath = usd_path
+            return cache_file
+        except Exception as e:
+            print(f"[MSC][WARN] Failed to create cache file for {log_name or name}: {e}")
+            return None
+
+    print(f"[MSC][WARN] Cache file API unavailable for {log_name or name}")
+    return None
+
+
+def _cache_file_needs_refresh(cache_file, usd_path):
+    if not cache_file:
+        return True
+    current_path = str(getattr(cache_file, "filepath", "") or "").replace("\\", "/")
+    target_path = str(usd_path or "").replace("\\", "/")
+    if current_path != target_path:
+        return True
+    try:
+        object_paths = [p.path for p in cache_file.object_paths if getattr(p, "path", None)]
+        return not bool(object_paths)
+    except Exception:
+        return True
+
+
+def _refresh_modifier_cache_file(mod, usd_path, unique_name, fallback_name=None, log_name=None):
+    fresh_cache = get_or_create_cache_file(unique_name, usd_path, fallback_name=fallback_name, log_name=log_name)
+    if fresh_cache:
+        try:
+            fresh_cache.filepath = usd_path
+        except Exception:
+            pass
+        try:
+            mod.cache_file = fresh_cache
+        except Exception:
+            pass
+    return fresh_cache
+
+
+def apply_cache_to_asset_geometry(collection, asset_name, usd_path, usd_file_name, create_modifier=False, create_cache_file=False):
+    for obj in iter_asset_geometry_meshes(collection, asset_name):
+        ensure_mesh_sequence_cache_binding(
+            obj,
+            usd_path,
+            usd_file_name,
+            asset_name=asset_name,
+            create_modifier=create_modifier,
+            create_cache_file=create_cache_file,
+        )
+
+
+def append_named_node_group_from_blend(blend_path, preferred_name):
+    existing_group = bpy.data.node_groups.get(preferred_name)
+    if existing_group:
+        try:
+            existing_group.use_fake_user = True
+        except Exception:
+            pass
+        return existing_group
+
+    loaded_group_name = None
+    with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
+        matches = [name for name in data_from.node_groups if name == preferred_name]
+        if not matches:
+            matches = [name for name in data_from.node_groups if str(name).startswith(preferred_name)]
+        if matches:
+            loaded_group_name = matches[0]
+            data_to.node_groups = [loaded_group_name]
+
+    if loaded_group_name:
+        group = bpy.data.node_groups.get(loaded_group_name)
+        if group:
+            try:
+                group.use_fake_user = True
+            except Exception:
+                pass
+            print(f"[P4] Appended node group: {loaded_group_name}")
+        return group
+
+    print(f"[P4][WARN] Node group not found in publish blend: {preferred_name}")
+    return None
+
+
+def append_published_asset_with_cache(blend_path, category_name, asset_name, context, usd_path=None, usd_file_name=""):
+    target_col_name = f"{asset_name}_col"
+    light_col_name = f"{asset_name}_light_col"
+    p4_node_tree_name = f"{asset_name}_p4"
+
+    with bpy.data.libraries.load(blend_path, link=False) as (data_from, data_to):
+        cols_to_import = []
+        if target_col_name in data_from.collections:
+            cols_to_import.append(target_col_name)
+        if light_col_name in data_from.collections:
+            cols_to_import.append(light_col_name)
+        data_to.collections = cols_to_import
+
+    if not data_to.collections:
+        raise ValueError(f"Collection not found in publish file: {target_col_name}")
+
+    append_named_node_group_from_blend(blend_path, p4_node_tree_name)
+
+    parent_col_name = f"{category_name}_col"
+    parent_col = bpy.data.collections.get(parent_col_name)
+    if not parent_col:
+        parent_col = bpy.data.collections.new(parent_col_name)
+        context.scene.collection.children.link(parent_col)
+
+    bound_cache_name = usd_file_name or os.path.basename(str(usd_path or ""))
+    for imported_col in data_to.collections:
+        if not imported_col:
+            continue
+        if imported_col.name not in parent_col.children:
+            parent_col.children.link(imported_col)
+        if usd_path and "light" not in imported_col.name.lower():
+            apply_cache_to_asset_geometry(
+                imported_col,
+                asset_name,
+                usd_path,
+                bound_cache_name,
+                create_modifier=False,
+                create_cache_file=False,
+            )
 
 
 def update_usd_cache(usd_path, objects):
@@ -4429,11 +7085,9 @@ def update_usd_cache(usd_path, objects):
             print(f"[SKIP] No MeshSequenceCache on {obj.name}; existing modifier only policy.")
             continue
 
-        try:
-            cache = bpy.data.cache_files.load(usd_path)
+        cache = get_or_create_cache_file(usd_file_name, usd_path, fallback_name=usd_file_name, log_name=obj.name)
+        if cache:
             mod.cache_file = cache
-        except RuntimeError:
-            mod.cache_file = bpy.data.cache_files.get(usd_file_name)
 
         if mod.cache_file:
             mod.cache_file.filepath = usd_path
@@ -4464,15 +7118,19 @@ class SF_MaterialSwitcherProperties(bpy.types.PropertyGroup):
     )
     
 def get_usd_path(scene_number, cut_number, asset_name, project, category_name=None):
-    prefix = get_project_prefix(project)
-    base_path = get_project_paths(project)
+    project_name = normalize_project_name(project)
+    prefix = get_project_prefix(project_name)
 
     # category_name이 비어있을 경우 기본값 보정
     if not category_name:
         category_name = "ch"
 
-    usd_filename = f"{prefix}_{scene_number}_{cut_number}_{category_name}_{asset_name}.usd"
-    return os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache", usd_filename)
+    cache_context = resolve_cache_context(scene_number, cut_number, bpy.context, project_name)
+    cache_dir = cache_context["cache_dir"]
+    scene_token = cache_context["scene_token"] or scene_number
+    cut_token = cache_context["cut_token"] or cut_number
+    usd_filename = f"{prefix}_{scene_token}_{cut_token}_{category_name}_{asset_name}.usd"
+    return os.path.join(cache_dir, usd_filename).replace("\\", "/")
 
 class SF_OT_ImportAndUpdateOperatorDSC(bpy.types.Operator):
     bl_idname = "sf.import_and_update_operator_dsc"
@@ -4487,11 +7145,10 @@ class SF_OT_ImportAndUpdateOperatorDSC(bpy.types.Operator):
         
         # 1. 프로젝트 설정
         try:
-            config = get_current_config()
-            base_path = config['drive']
-            prefix = config['prefix']
+            project_name = get_current_project_name()
+            prefix = get_project_prefix(project_name)
         except:
-            base_path = "B:/"
+            project_name = "BTS"
             prefix = "BTS"
 
         scene_number = my_tool.scene_number
@@ -4508,8 +7165,8 @@ class SF_OT_ImportAndUpdateOperatorDSC(bpy.types.Operator):
                 category_name = category.name
 
                 # (A) USD 캐시 경로 계산
-                usd_filename = f"{prefix}_{scene_number}_{cut_number}_{category_name}_{asset_name}.usd"
-                usd_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren", "cache", usd_filename).replace("\\", "/")
+                usd_path = get_usd_path(scene_number, cut_number, asset_name, project_name, category_name)
+                usd_filename = os.path.basename(usd_path)
                 
                 # USD 파일 존재 여부 확인
                 has_usd = os.path.exists(usd_path)
@@ -4530,9 +7187,7 @@ class SF_OT_ImportAndUpdateOperatorDSC(bpy.types.Operator):
 
                 if not asset_col:
                     print(f"[Import] '{asset_name}' 씬에 없음 -> Import 시작")
-                    blend_path = os.path.join(base_path, "assets", category_name, asset_name, "mod", f"{asset_name}.blend")
-                    
-                    blend_path = blend_path.replace("\\", "/")
+                    blend_path = get_asset_blend_path(category_name, asset_name, project_name).replace("\\", "/")
 
                     if not os.path.exists(blend_path):
                         self.report({'ERROR'}, f"Source File Missing: {blend_path}")
@@ -4596,9 +7251,8 @@ class SF_OT_ImportAndUpdateOperatorDSC(bpy.types.Operator):
                 self.update_mesh_sequence_cache_recursive(imported_col, asset_name, usd_path, usd_file_name)
 
     def update_mesh_sequence_cache_recursive(self, collection, asset_name, usd_path, usd_file_name):
-        for obj in collection.all_objects:
-            if obj.type == 'MESH':
-                self._apply_cache_to_object(obj, asset_name, usd_path, usd_file_name)
+        for obj in iter_asset_geometry_meshes(collection, asset_name):
+            self._apply_cache_to_object(obj, asset_name, usd_path, usd_file_name)
 
     def _get_existing_cache_file(self, obj):
         for m in obj.modifiers:
@@ -4607,29 +7261,19 @@ class SF_OT_ImportAndUpdateOperatorDSC(bpy.types.Operator):
         return None
 
     def _apply_cache_to_object(self, obj, asset_name, usd_path, usd_file_name):
-        mod = None
-        for m in obj.modifiers:
-            if m.type == 'MESH_SEQUENCE_CACHE':
-                mod = m
-                break
+        mod, cache_file = ensure_mesh_sequence_cache_binding(
+            obj,
+            usd_path,
+            usd_file_name,
+            asset_name=asset_name,
+            create_modifier=False,
+            create_cache_file=False,
+        )
         if not mod:
-            print(f"[SKIP] {obj.name}: MeshSequenceCache 모디파이어가 없어 캐시 경로만 갱신하지 못함")
+            print(f"[SKIP] {obj.name}: 기존 MeshSequenceCache가 없어 갱신하지 않음")
             return
-
-        cf = getattr(mod, 'cache_file', None)
-        if not cf:
-            print(f"[SKIP] {obj.name}: 기존 cache_file 데이터블록이 없어 캐시 경로만 갱신하지 못함")
-            return
-
-        cf.name = usd_file_name
-        cf.filepath = usd_path
-
-        try:
-            matched, old_path, new_path = _sync_modifier_object_path_from_cache(mod, obj.name, asset_name=asset_name)
-            if not matched:
-                print(f"[WARN] Prim Path 매칭 실패: {obj.name} | 기존 경로 유지: {old_path}")
-        except Exception as e:
-            print(f"[WARN] Prim Path 설정 실패: {obj.name} ({e})")
+        if not cache_file:
+            print(f"[SKIP] {obj.name}: 기존 cache_file이 없어 갱신하지 않음")
             
             
 class SF_OT_ImportSelectedOperatorDSC(bpy.types.Operator):
@@ -4726,7 +7370,7 @@ class SF_OT_ImportSelectedOperatorDSC(bpy.types.Operator):
         if bpy.app.version >= (4, 4, 0):
             usd_args["apply_unit_conversion_scale"] = False
 
-        bpy.ops.wm.usd_import(**usd_args)
+        safe_usd_import(**usd_args)
 
         bpy.context.view_layer.update()
 
@@ -5015,6 +7659,102 @@ class SF_OT_UpdateSelectedOperatorDSC(bpy.types.Operator):
 ################################################################
 ######################### Line Art #############################
 ################################################################
+def _run_without_global_undo(callback):
+    prefs = getattr(bpy.context, "preferences", None)
+    edit_prefs = getattr(prefs, "edit", None)
+    if edit_prefs is None or not hasattr(edit_prefs, "use_global_undo"):
+        return callback()
+
+    original = bool(edit_prefs.use_global_undo)
+    try:
+        if original:
+            edit_prefs.use_global_undo = False
+        return callback()
+    finally:
+        try:
+            edit_prefs.use_global_undo = original
+        except Exception:
+            pass
+
+
+def _modern_update_selected_operator_dsc_execute(self, context):
+    def _execute_sync():
+        scene = context.scene
+        my_tool = scene.my_tool
+
+        try:
+            project_name = get_current_project_name()
+        except Exception:
+            project_name = "BTS"
+
+        scene_number = my_tool.scene_number
+        cut_number = my_tool.cut_number
+        updated_count = 0
+
+        selected_assets = []
+        for category in scene.sf_file_categories:
+            for item in category.items:
+                if item.is_selected:
+                    selected_assets.append((category.name, item.name))
+
+        if not selected_assets:
+            self.report({'WARNING'}, "선택된 어셋이 없습니다.")
+            return {'CANCELLED'}
+
+        for cat_name, asset_name in selected_assets:
+            usd_path = get_usd_path(scene_number, cut_number, asset_name, project_name, cat_name)
+            usd_filename = os.path.basename(usd_path)
+            has_usd = os.path.exists(usd_path)
+
+            search_target = f"_{cat_name}_{asset_name}.".lower()
+            usd_dir = os.path.dirname(usd_path)
+            if not has_usd and os.path.exists(usd_dir):
+                for f in os.listdir(usd_dir):
+                    if f.lower().endswith(".usd") and search_target in f.lower():
+                        usd_path = os.path.join(usd_dir, f).replace("\\", "/")
+                        usd_filename = f
+                        has_usd = True
+                        break
+
+            if not has_usd:
+                print(f"[Skip] USD cache not found: {asset_name} -> {usd_path}")
+                continue
+
+            asset_col = bpy.data.collections.get(f"{asset_name}_col")
+            if not asset_col:
+                print(f"[Skip] Collection not found: {asset_name}_col")
+                continue
+
+            before_count = updated_count
+            for obj in iter_asset_geometry_meshes(asset_col, asset_name):
+                mod, cache_file = ensure_mesh_sequence_cache_binding(
+                    obj,
+                    usd_path,
+                    usd_filename,
+                    asset_name=asset_name,
+                    create_modifier=False,
+                    create_cache_file=False,
+                )
+                if not mod or not cache_file:
+                    continue
+                updated_count += 1
+
+            if updated_count == before_count:
+                print(f"[Skip] No existing MeshSequenceCache/cache_file found to refresh: {asset_name}")
+
+        if updated_count == 0:
+            self.report({'WARNING'}, "갱신된 캐시가 없습니다.")
+        else:
+            self.report({'INFO'}, f"총 {updated_count}개 어셋 캐시 연결 완료")
+        return {'FINISHED'}
+
+    return _run_without_global_undo(_execute_sync)
+
+
+SF_OT_UpdateSelectedOperatorDSC.execute = _modern_update_selected_operator_dsc_execute
+SF_OT_UpdateSelectedOperatorDSC.bl_options = {'REGISTER'}
+
+
 def get_latest_black_material():
     # "Black."으로 시작하는 재료 중 가장 최신의 것을 찾아 반환
     black_materials = [mat for mat in bpy.data.materials if mat.name.startswith("Black.")]
@@ -5097,6 +7837,35 @@ def get_latest_file_version(scene_number, cut_number):
 
     latest_version = max(versions)
     return f"v{str(latest_version).zfill(3)}"
+
+
+def is_root_work_dir_name(work_dir_name):
+    return str(work_dir_name or "").strip() in {"", ".", "./", "\\"}
+
+
+def get_scene_save_directory(scene_number, cut_number, project_name=None):
+    project_name = get_current_project_name() if project_name is None else normalize_project_name(project_name)
+    base_path = build_browser_base_path(scene_number, cut_number, project_name)
+    work_dir_name = get_project_ren_dir_name(project_name)
+    if is_root_work_dir_name(work_dir_name):
+        return base_path
+    return os.path.join(base_path, work_dir_name)
+
+
+def build_scene_save_file_stem(scene_number, cut_number, project_name=None):
+    project_name = get_current_project_name() if project_name is None else normalize_project_name(project_name)
+    project_prefix = get_project_prefix(project_name)
+    scene_token = str(scene_number or "").strip()
+    cut_token = str(cut_number or "").strip()
+    work_dir_name = get_project_ren_dir_name(project_name)
+
+    if get_scene_identifier_mode(project_name) == "filename" or is_root_work_dir_name(work_dir_name):
+        return f"{project_prefix}_{scene_token}_{cut_token}_"
+    return f"{project_prefix}_{scene_token}_{cut_token}_{work_dir_name}_"
+
+
+def build_scene_save_filename(scene_number, cut_number, version="v000", project_name=None):
+    return f"{build_scene_save_file_stem(scene_number, cut_number, project_name)}{version}.blend"
     
 
 class SF_SaveRenderScene(bpy.types.Operator):
@@ -5141,6 +7910,38 @@ class SF_SaveRenderScene(bpy.types.Operator):
 
 
 # 버전 정보를 유지하기 위한 전역 변수
+def _sf_save_render_scene_invoke(self, context, event):
+    scene = context.scene
+    my_tool = scene.my_tool
+    self.scene_number = my_tool.scene_number if my_tool else 'default'
+    self.cut_number = my_tool.cut_number if my_tool else 'default'
+    self.project_name = get_current_project_name()
+    self.base_path = get_scene_save_directory(self.scene_number, self.cut_number, self.project_name)
+    self.file_name = build_scene_save_filename(self.scene_number, self.cut_number, "v000", self.project_name)
+    self.full_path = os.path.join(self.base_path, self.file_name)
+
+    if os.path.exists(self.full_path):
+        return context.window_manager.invoke_confirm(self, event)
+    return self.execute(context)
+
+
+def _sf_save_render_scene_execute(self, context):
+    os.makedirs(self.base_path, exist_ok=True)
+
+    try:
+        bpy.ops.wm.save_as_mainfile(filepath=self.full_path)
+        self.report({'INFO'}, f"Scene saved to {self.full_path}")
+    except Exception as e:
+        self.report({'ERROR'}, f"Failed to save scene: {e}")
+        return {'CANCELLED'}
+
+    return {'FINISHED'}
+
+
+SF_SaveRenderScene.invoke = _sf_save_render_scene_invoke
+SF_SaveRenderScene.execute = _sf_save_render_scene_execute
+
+
 current_version = 1
 
 def update_version(context, increment):
@@ -5206,43 +8007,54 @@ class IncrementalSaveOperator(bpy.types.Operator):
     bl_label = "Incremental Save"
 
     def execute(self, context):
-        scene_number = context.scene.my_tool.scene_number
-        cut_number = context.scene.my_tool.cut_number
-        base_path = get_project_paths()
-        project_prefix = get_project_prefix()
-        dir_path = os.path.join(base_path, "scenes", scene_number, cut_number, "ren")
+        filepath = bpy.data.filepath
+        if not filepath:
+            self.report({'ERROR'}, "현재 저장된 .blend 파일이 없습니다.")
+            return {'CANCELLED'}
 
-        # 디렉토리 내 파일을 검색하여 가장 높은 버전의 파일을 찾습니다.
-        blend_file = find_highest_version_file(dir_path, project_prefix, scene_number, cut_number)
+        next_filepath = build_incremental_save_filepath(filepath)
+        if not next_filepath:
+            self.report({'ERROR'}, "다음 인크리멘탈 파일 경로를 만들 수 없습니다.")
+            return {'CANCELLED'}
 
-        if blend_file:
-            file_path = os.path.join(dir_path, blend_file)
-
-            # 'Incremental Save'를 수행합니다.
-            bpy.ops.wm.save_mainfile(filepath=file_path, incremental=True)
-
-            self.report({'INFO'}, "Incremental save completed.")
-        else:
-            self.report({'ERROR'}, "No valid .blend file found for incremental save.")
-        
+        bpy.ops.wm.save_as_mainfile(filepath=next_filepath, copy=False)
+        self.report({'INFO'}, f"Saved incremental file: {os.path.basename(next_filepath)}")
         return {'FINISHED'}
 
-def find_highest_version_file(dir_path, project_prefix, scene_number, cut_number):
-    pattern = re.compile(rf"{re.escape(project_prefix)}_{re.escape(scene_number)}_{re.escape(cut_number)}_ren_v(\d+)\.blend$")
-    highest_version = -1
-    highest_version_file = None
 
-    if os.path.exists(dir_path):
-        for file_name in os.listdir(dir_path):
-            if file_name.endswith(".blend"):  # .blend 확장자만 다룹니다.
-                match = pattern.match(file_name)
-                if match:
-                    version = int(match.group(1))
-                    if version > highest_version:
-                        highest_version = version
-                        highest_version_file = file_name
+def build_incremental_save_filepath(filepath, suffix_override=None):
+    directory = os.path.dirname(filepath)
+    filename = os.path.basename(filepath)
+    stem, extension = os.path.splitext(filename)
 
-    return highest_version_file
+    match = re.search(r"(?i)^(.*?)(v(\d{3}))(?:_([^.]+))?$", stem)
+    if not match:
+        return None
+
+    prefix_part = match.group(1)
+    current_suffix = match.group(4) or ""
+    desired_suffix = current_suffix if suffix_override is None else str(suffix_override).strip()
+
+    pattern = re.compile(rf"(?i)^{re.escape(prefix_part)}v(\d{{3}})(?:_([^.]+))?{re.escape(extension)}$")
+    highest_version = 0
+
+    if os.path.exists(directory):
+        for file_name in os.listdir(directory):
+            matched = pattern.match(file_name)
+            if not matched:
+                continue
+            file_suffix = matched.group(2) or ""
+            if file_suffix != desired_suffix:
+                continue
+            highest_version = max(highest_version, int(matched.group(1)))
+
+    next_version = highest_version + 1 if highest_version else int(match.group(3)) + 1
+    version_text = f"v{next_version:03d}"
+    new_stem = f"{prefix_part}{version_text}"
+    if desired_suffix:
+        new_stem += f"_{desired_suffix}"
+
+    return os.path.join(directory, new_stem + extension)
 
 
 ADDON_PATH = "M:/RND/SFtools/2023/render/rrRender.py"
@@ -5961,14 +8773,21 @@ class OBJECT_OT_apply_light_mask(bpy.types.Operator):
                 collection.objects.link(light_object)
                 light_data.color = color
                 light_data.energy = 3  # Set power to 100
-                light_data.specular_factor = 0
-                light_data.volume_factor = 0
-                light_data.shadow_soft_size = 0.15  # Set radius to 15 cm
-                light_data.cutoff_distance = 1.0  # Set custom distance to 100 cm
-                light_data.use_shadow = True
-                light_data.shadow_cascade_max_distance = 8
-                light_data.shadow_buffer_bias = 0.03
-                light_data.use_contact_shadow = False
+                for attr_name, value in (
+                    ("specular_factor", 0),
+                    ("volume_factor", 0),
+                    ("shadow_soft_size", 0.15),
+                    ("cutoff_distance", 1.0),
+                    ("use_shadow", True),
+                    ("shadow_cascade_max_distance", 8),
+                    ("shadow_buffer_bias", 0.03),
+                    ("use_contact_shadow", False),
+                ):
+                    if hasattr(light_data, attr_name):
+                        try:
+                            setattr(light_data, attr_name, value)
+                        except Exception:
+                            pass
         # bpy.data.objects["lgtRed"].hide_viewport = False
         # bpy.data.objects["lgtRed"].hide_render = False
 
@@ -7000,6 +9819,40 @@ class OBJECT_OT_make_2com(bpy.types.Operator):
     bl_description = "Apply 2 comma animation with step modifier"
     bl_options = {'REGISTER', 'UNDO'}
 
+    def get_action_fcurves(self, action, animation_data=None):
+        if not action:
+            return []
+
+        fcurves = getattr(action, "fcurves", None)
+        if fcurves is not None:
+            return fcurves
+
+        layers = getattr(action, "layers", None)
+        if not layers:
+            return []
+
+        action_slot = getattr(animation_data, "action_slot", None) if animation_data else None
+        for layer in layers:
+            for strip in getattr(layer, "strips", []):
+                channelbag = None
+
+                if action_slot and hasattr(strip, "channelbag"):
+                    try:
+                        channelbag = strip.channelbag(action_slot)
+                    except Exception:
+                        channelbag = None
+
+                if channelbag is None:
+                    maybe_channelbag = getattr(strip, "channelbag", None)
+                    if maybe_channelbag and not callable(maybe_channelbag):
+                        channelbag = maybe_channelbag
+
+                fcurves = getattr(channelbag, "fcurves", None) if channelbag else None
+                if fcurves is not None:
+                    return fcurves
+
+        return []
+
     def execute(self, context):
         selected_objects = context.selected_objects
         if not selected_objects:
@@ -7024,12 +9877,15 @@ class OBJECT_OT_make_2com(bpy.types.Operator):
                     # 기존 키프레임 제거
                     if cache_file.animation_data and cache_file.animation_data.action:
                         action = cache_file.animation_data.action
-                        for fcurve in action.fcurves:
+                        for fcurve in list(self.get_action_fcurves(action, cache_file.animation_data)):
                             # 기존 모디파이어 제거
-                            for fmod in fcurve.modifiers:
+                            for fmod in list(fcurve.modifiers):
                                 fcurve.modifiers.remove(fmod)
 
-                            action.fcurves.remove(fcurve)
+                            try:
+                                self.get_action_fcurves(action, cache_file.animation_data).remove(fcurve)
+                            except Exception:
+                                pass
 
                     # 새로운 키프레임 추가
                     scene = context.scene
@@ -7043,7 +9899,7 @@ class OBJECT_OT_make_2com(bpy.types.Operator):
 
                     # 키프레임을 리니어로 설정
                     if cache_file.animation_data and cache_file.animation_data.action:
-                        for fcurve in cache_file.animation_data.action.fcurves:
+                        for fcurve in self.get_action_fcurves(cache_file.animation_data.action, cache_file.animation_data):
                             for keyframe in fcurve.keyframe_points:
                                 keyframe.interpolation = 'LINEAR'
 
@@ -7058,11 +9914,12 @@ class OBJECT_OT_make_2com(bpy.types.Operator):
             if obj.data and obj.data.shape_keys:
                 shape_keys = obj.data.shape_keys.key_blocks
                 for shape_key in shape_keys:
-                    action = shape_key.id_data.animation_data.action if shape_key.id_data and shape_key.id_data.animation_data else None
+                    animation_data = shape_key.id_data.animation_data if shape_key.id_data else None
+                    action = animation_data.action if animation_data else None
                     if action:
-                        for fcurve in action.fcurves:
+                        for fcurve in self.get_action_fcurves(action, animation_data):
                             # 기존 Step Modifier 제거
-                            for fmod in fcurve.modifiers:
+                            for fmod in list(fcurve.modifiers):
                                 if fmod.type == 'STEPPED':
                                     fcurve.modifiers.remove(fmod)
 
@@ -7087,6 +9944,40 @@ class OBJECT_OT_del_2com(bpy.types.Operator):
     bl_description = "Remove 2 comma animation and modifiers"
     bl_options = {'REGISTER', 'UNDO'}
 
+    def get_action_fcurves(self, action, animation_data=None):
+        if not action:
+            return []
+
+        fcurves = getattr(action, "fcurves", None)
+        if fcurves is not None:
+            return fcurves
+
+        layers = getattr(action, "layers", None)
+        if not layers:
+            return []
+
+        action_slot = getattr(animation_data, "action_slot", None) if animation_data else None
+        for layer in layers:
+            for strip in getattr(layer, "strips", []):
+                channelbag = None
+
+                if action_slot and hasattr(strip, "channelbag"):
+                    try:
+                        channelbag = strip.channelbag(action_slot)
+                    except Exception:
+                        channelbag = None
+
+                if channelbag is None:
+                    maybe_channelbag = getattr(strip, "channelbag", None)
+                    if maybe_channelbag and not callable(maybe_channelbag):
+                        channelbag = maybe_channelbag
+
+                fcurves = getattr(channelbag, "fcurves", None) if channelbag else None
+                if fcurves is not None:
+                    return fcurves
+
+        return []
+
     def execute(self, context):
         selected_objects = context.selected_objects
         if not selected_objects:
@@ -7105,18 +9996,23 @@ class OBJECT_OT_del_2com(bpy.types.Operator):
                     # F-Curve 및 키프레임 제거
                     if cache_file.animation_data and cache_file.animation_data.action:
                         action = cache_file.animation_data.action
-                        for fcurve in list(action.fcurves):  # 안전한 삭제를 위해 리스트로 변환
-                            action.fcurves.remove(fcurve)
+                        fcurves = self.get_action_fcurves(action, cache_file.animation_data)
+                        for fcurve in list(fcurves):
+                            try:
+                                fcurves.remove(fcurve)
+                            except Exception:
+                                pass
 
             # 처리: Shape Key Modifiers
             if obj.data and obj.data.shape_keys:
                 shape_keys = obj.data.shape_keys.key_blocks
                 for shape_key in shape_keys:
-                    action = shape_key.id_data.animation_data.action if shape_key.id_data and shape_key.id_data.animation_data else None
+                    animation_data = shape_key.id_data.animation_data if shape_key.id_data else None
+                    action = animation_data.action if animation_data else None
                     if action:
-                        for fcurve in action.fcurves:
+                        for fcurve in self.get_action_fcurves(action, animation_data):
                             # Step Modifier 제거 (키프레임은 유지)
-                            for fmod in fcurve.modifiers:
+                            for fmod in list(fcurve.modifiers):
                                 if fmod.type == 'STEPPED':
                                     fcurve.modifiers.remove(fmod)
 
@@ -7192,8 +10088,7 @@ def run_set_scene_from_file(dummy):
     bpy.ops.sf.set_scene_from_file()
     
 def register_scene_loader_handler():
-    if run_set_scene_from_file not in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.append(run_set_scene_from_file)
+    return
 
     
 class SF_OT_SetSceneFromFile(bpy.types.Operator):
@@ -7210,6 +10105,10 @@ class SF_OT_SetSceneFromFile(bpy.types.Operator):
         if not filepath:
             self.report({'WARNING'}, "저장된 .blend 파일이 없습니다.")
             return {'CANCELLED'}
+
+        if sync_browser_to_filepath(context, filepath, save_state=True):
+            self.report({'INFO'}, "현재 열린 파일 기준으로 브라우저를 동기화했습니다.")
+            return {'FINISHED'}
 
         filename = os.path.basename(filepath)
 
@@ -7962,11 +10861,12 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
         if not asset_col:
             return {}
 
-        return self.snapshot_modifiers_for_collection(asset_col)
+        return self.snapshot_modifiers_for_collection(asset_col, asset_name=asset_name)
 
-    def snapshot_modifiers_for_collection(self, collection):
+    def snapshot_modifiers_for_collection(self, collection, asset_name=None):
         snapshot = {}
-        for obj in collection.all_objects:
+        objects = iter_asset_geometry_meshes(collection, asset_name) if asset_name else collection.all_objects
+        for obj in objects:
             if obj.type != 'MESH':
                 continue
 
@@ -8018,7 +10918,7 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
         if not imported_col:
             return {}
 
-        snapshot = self.snapshot_modifiers_for_collection(imported_col)
+        snapshot = self.snapshot_modifiers_for_collection(imported_col, asset_name=asset_name)
         self.delete_collection_recursive(imported_col)
         return snapshot
 
@@ -8027,7 +10927,7 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
         if not asset_col or not snapshot:
             return
 
-        for obj in asset_col.all_objects:
+        for obj in iter_asset_geometry_meshes(asset_col, asset_name):
             if obj.type != 'MESH':
                 continue
 
@@ -8078,7 +10978,14 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
             if col:
                 p_col.children.link(col)
                 if replace_mesh and replace_modifiers and col.name == target_col_name and usd_path and os.path.exists(usd_path):
-                    self.apply_cache(col, asset_name, usd_path, usd_file_name)
+                    apply_cache_to_asset_geometry(
+                        col,
+                        asset_name,
+                        usd_path,
+                        usd_file_name,
+                        create_modifier=False,
+                        create_cache_file=False,
+                    )
 
     def update_asset_materials(self, context, blend_file_path, asset_name, preserve_texture_links=False):
         asset_col = bpy.data.collections.get(f"{asset_name}_col")
@@ -8187,8 +11094,15 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
                     pass
 
     def apply_cache(self, collection, asset_name, usd_path, usd_file_name):
-        for obj in collection.all_objects:
-            if obj.type == 'MESH':
+        return apply_cache_to_asset_geometry(
+            collection,
+            asset_name,
+            usd_path,
+            usd_file_name,
+            create_modifier=False,
+            create_cache_file=False,
+        )
+        for obj in iter_asset_geometry_meshes(collection, asset_name):
                 # 엠티 하위인지 확인 (오타 수정된 안전장치)
                 is_real_mesh = False
                 curr = obj.parent
@@ -8205,7 +11119,9 @@ class SF_OT_UpdateFromPublish(bpy.types.Operator):
                     for mod in obj.modifiers:
                         if mod.type == 'MESH_SEQUENCE_CACHE':
                             unique_name = f"{usd_file_name}_{obj.name}"
-                            cf = bpy.data.cache_files.get(unique_name) or bpy.data.cache_files.load(usd_path)
+                            cf = get_or_create_cache_file(unique_name, usd_path, fallback_name=usd_file_name, log_name=obj.name)
+                            if not cf:
+                                continue
                             cf.name = unique_name
                             cf.filepath = usd_path
                             mod.cache_file = cf
@@ -8222,6 +11138,21 @@ class SF_OT_SetOutputPath(bpy.types.Operator):
     bl_label = "Set Output Path"
 
     prefix: bpy.props.StringProperty(name="Prefix", default="")  # 사용자 입력 프리픽스
+    suffix: bpy.props.EnumProperty(
+        name="Suffix",
+        description="Output suffix",
+        items=[
+            ('default', "Default", ""),
+            ('ch', "ch", ""),
+            ('bg', "bg", ""),
+            ('line', "line", ""),
+            ('prop', "prop", ""),
+            ('mask', "mask", ""),
+            ('chCol', "chCol", ""),
+        ],
+        default='default'
+    )
+    custom_suffix: bpy.props.StringProperty(name="Custom Suffix", default="")
 
     def execute(self, context):
         import os, re
@@ -8241,6 +11172,29 @@ class SF_OT_SetOutputPath(bpy.types.Operator):
         if not filepath:
             self.report({'WARNING'}, "Output path is empty")
             return {'CANCELLED'}
+
+        prefix_value = str(getattr(self, "prefix", "") or "").strip()
+        custom_suffix_value = str(getattr(self, "custom_suffix", "") or "").strip()
+        suffix_value = str(getattr(self, "suffix", "default") or "default").strip()
+
+        if custom_suffix_value:
+            suffix_str = custom_suffix_value
+        elif prefix_value:
+            suffix_str = prefix_value
+        elif suffix_value == 'default':
+            suffix_str = ""
+        else:
+            suffix_str = suffix_value
+
+        new_filepath = build_incremental_save_filepath(filepath, suffix_override=suffix_str)
+        if not new_filepath:
+            self.report({'WARNING'}, "?뚯씪紐낆뿉??踰꾩쟾??李얠쓣 ???놁뒿?덈떎.")
+            return {'CANCELLED'}
+
+        new_filename = os.path.basename(new_filepath)
+        bpy.ops.wm.save_as_mainfile(filepath=new_filepath, copy=False)
+        self.report({'INFO'}, f"Saved as {new_filename}")
+        return {'FINISHED'}
 
         dirpath = os.path.dirname(filepath)
 
@@ -8269,6 +11223,175 @@ class SF_OT_SetOutputPath(bpy.types.Operator):
         self.report({'INFO'}, f"Output path set from filename: {new_path}")
         return {'FINISHED'}
 
+
+
+class SF_OT_SetOutputPath(bpy.types.Operator):
+    bl_idname = "sf.set_output_path"
+    bl_label = "Set Output Path"
+
+    prefix: bpy.props.StringProperty(name="Prefix", default="")
+    suffix: bpy.props.EnumProperty(
+        name="Suffix",
+        description="Output suffix",
+        items=[
+            ('default', "Default", ""),
+            ('ch', "ch", ""),
+            ('bg', "bg", ""),
+            ('line', "line", ""),
+            ('prop', "prop", ""),
+            ('mask', "mask", ""),
+            ('chCol', "chCol", ""),
+        ],
+        default='default'
+    )
+    custom_suffix: bpy.props.StringProperty(name="Custom Suffix", default="")
+
+    def execute(self, context):
+        import os, re
+
+        sc = context.scene
+        filepath = sc.render.filepath
+        if not filepath:
+            self.report({'WARNING'}, "Output path is empty")
+            return {'CANCELLED'}
+
+        prefix_value = str(getattr(self, "prefix", "") or "").strip()
+        custom_suffix_value = str(getattr(self, "custom_suffix", "") or "").strip()
+        suffix_value = str(getattr(self, "suffix", "default") or "default").strip()
+
+        if custom_suffix_value:
+            suffix_str = custom_suffix_value
+        elif prefix_value:
+            suffix_str = prefix_value
+        elif suffix_value == 'default':
+            suffix_str = ""
+        else:
+            suffix_str = suffix_value
+
+        dirpath = os.path.dirname(filepath)
+        version_source = dirpath if re.search(r"(v\d{3})", dirpath) else bpy.data.filepath
+        match = re.search(r"(v\d{3})", version_source)
+        if not match:
+            self.report({'WARNING'}, "파일명에서 버전을 찾을 수 없습니다.")
+            return {'CANCELLED'}
+
+        my_tool = getattr(context.scene, "my_tool", None)
+        scene_number = str(getattr(my_tool, "scene_number", "") or "")
+        cut_number = str(getattr(my_tool, "cut_number", "") or "")
+        if not scene_number or not cut_number:
+            blend_name = os.path.basename(bpy.data.filepath)
+            scene_cut_match = re.search(r"(\d{4})_(\d{4})", blend_name)
+            if scene_cut_match:
+                scene_number, cut_number = scene_cut_match.groups()
+
+        version = match.group(1)
+        new_version = f"{version}_{suffix_str}" if suffix_str else version
+        new_dirpath = re.sub(r"(v\d{3}.*)$", new_version, dirpath)
+
+        if scene_number and cut_number:
+            new_filename = f"{scene_number}_{cut_number}_{suffix_str}_" if suffix_str else f"{scene_number}_{cut_number}_"
+        else:
+            new_filename = f"{suffix_str}_" if suffix_str else ""
+
+        new_path = os.path.join(new_dirpath, new_filename)
+        sc.render.filepath = new_path
+
+        if suffix_str == "line":
+            set_output_png(sc.render.image_settings, alpha=False, label="Output Path line: ")
+        else:
+            set_output_exr_multilayer(sc.render.image_settings, label="Output Path EXR: ")
+
+        self.report({'INFO'}, f"Output path set: {new_path}")
+        return {'FINISHED'}
+
+
+class SF_OT_SetOutputPath(bpy.types.Operator):
+    bl_idname = "sf.set_output_path"
+    bl_label = "Set Output Path"
+
+    prefix: bpy.props.StringProperty(name="Prefix", default="")
+    suffix: bpy.props.EnumProperty(
+        name="Suffix",
+        description="Output suffix",
+        items=[
+            ('default', "Default", ""),
+            ('ch', "ch", ""),
+            ('bg', "bg", ""),
+            ('line', "line", ""),
+            ('prop', "prop", ""),
+            ('mask', "mask", ""),
+            ('chCol', "chCol", ""),
+        ],
+        default='default'
+    )
+    custom_suffix: bpy.props.StringProperty(name="Custom Suffix", default="")
+
+    def execute(self, context):
+        import os, re
+
+        sc = context.scene
+        prefix_value = str(getattr(self, "prefix", "") or "").strip()
+        custom_suffix_value = str(getattr(self, "custom_suffix", "") or "").strip()
+        suffix_value = str(getattr(self, "suffix", "default") or "default").strip()
+
+        if custom_suffix_value:
+            suffix_str = custom_suffix_value
+        elif prefix_value:
+            suffix_str = prefix_value
+        elif suffix_value == 'default':
+            suffix_str = ""
+        else:
+            suffix_str = suffix_value
+
+        my_tool = getattr(context.scene, "my_tool", None)
+        scene_number = str(getattr(my_tool, "scene_number", "") or "")
+        cut_number = str(getattr(my_tool, "cut_number", "") or "")
+        if not scene_number or not cut_number:
+            blend_name = os.path.basename(bpy.data.filepath)
+            scene_cut_match = re.search(r"(\d{4})_(\d{4})", blend_name)
+            if scene_cut_match:
+                scene_number, cut_number = scene_cut_match.groups()
+
+        filepath = sc.render.filepath
+        dirpath = os.path.dirname(filepath) if filepath else ""
+
+        version_match = None
+        for candidate in (dirpath, filepath, bpy.data.filepath):
+            if candidate:
+                version_match = re.search(r"(v\d{3})", candidate)
+            if version_match:
+                break
+
+        if version_match:
+            version = version_match.group(1)
+        else:
+            try:
+                version = f"v{int(current_version):03d}"
+            except Exception:
+                version = "v001"
+
+        version_folder = f"{version}_{suffix_str}" if suffix_str else version
+        if dirpath and re.search(r"(v\d{3}[^/\\\\]*)$", dirpath):
+            new_dirpath = re.sub(r"(v\d{3}[^/\\\\]*)$", version_folder, dirpath)
+        else:
+            base_output_dir = get_project_output_path(scene_number or "0000", cut_number or "0000")
+            new_dirpath = os.path.join(base_output_dir, version_folder)
+
+        if scene_number and cut_number:
+            new_filename = f"{scene_number}_{cut_number}_{suffix_str}_" if suffix_str else f"{scene_number}_{cut_number}_"
+        else:
+            new_filename = f"{suffix_str}_" if suffix_str else ""
+
+        new_path = os.path.join(new_dirpath, new_filename)
+        sc.render.filepath = new_path
+
+        if suffix_str == "line":
+            set_output_png(sc.render.image_settings, alpha=False, label="Output Path line: ")
+        else:
+            set_output_exr_multilayer(sc.render.image_settings, label="Output Path EXR: ")
+
+        self.report({'INFO'}, f"Output path set: {new_path}")
+        return {'FINISHED'}
 
 
 class SF_OT_SaveIncrementalSuffix(bpy.types.Operator):
@@ -8439,13 +11562,11 @@ def get_render_preset_json_path(project_name=None):
         DSC      -> S:/_json/renderPreset.json
         FUZZ     -> Z:/_json/renderPreset.json
     """
-    base_path = get_project_paths(project_name)
-    if not base_path:
-        return None
-    return os.path.join(base_path, "_json", "renderPreset.json")
+    return get_project_json_path("renderPreset.json", project_name)
 
 
 _render_preset_cache = {}
+_render_preset_missing_warned = set()
 
 
 def load_render_presets(project_name=None):
@@ -8479,6 +11600,45 @@ def load_render_presets(project_name=None):
             "mtime": mtime,
             "data": dict(data),
         }
+        return dict(data)
+
+    except Exception as e:
+        print(f"[RenderPreset] JSON 불러오기 실패: {json_path} / {e}")
+        return {}
+
+
+def load_render_presets(project_name=None):
+    json_path = get_render_preset_json_path(project_name)
+
+    if not json_path:
+        print("[RenderPreset] 프로젝트 경로를 찾을 수 없습니다.")
+        return {}
+
+    if not os.path.exists(json_path):
+        if json_path not in _render_preset_missing_warned:
+            print(f"[RenderPreset] renderPreset.json 없음: {json_path}")
+            _render_preset_missing_warned.add(json_path)
+        return {}
+
+    try:
+        mtime = os.path.getmtime(json_path)
+        cached = _render_preset_cache.get(json_path)
+        if cached and cached.get("mtime") == mtime:
+            return dict(cached.get("data", {}))
+
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict):
+            print(f"[RenderPreset] JSON 최상위 구조가 dict가 아닙니다: {json_path}")
+            return {}
+
+        _render_preset_cache[json_path] = {
+            "mtime": mtime,
+            "data": dict(data),
+        }
+        if json_path in _render_preset_missing_warned:
+            _render_preset_missing_warned.discard(json_path)
         return dict(data)
 
     except Exception as e:
@@ -8944,12 +12104,22 @@ class SF_PT_SceneBrowser(bpy.types.Panel):
         row = box.row()
         row.prop(project_settings, "projects", text="Project")       
         row.operator("sf.refresh_scene_and_cut_cache", text="", icon="FILE_REFRESH")
+        row.operator("sf.project_path_settings_popup", text="", icon="PREFERENCES")
+        row.operator("sf.validate_project", text="", icon="CHECKMARK")
         row = box.row()
-        row.prop(my_tool, "scene_number")
+        row.prop(my_tool, "scene_number", text=get_browser_level_label(1))
         row.operator("sf.refresh_scene_and_cut_cache", text="", icon="FILE_REFRESH")
-        row = box.row()
-        row.prop(my_tool, "cut_number")
-        row.operator("sf.refresh_scene_and_cut_cache", text="", icon="FILE_REFRESH")
+        if get_browser_level_definition(2):
+            row = box.row()
+            row.prop(my_tool, "cut_number", text=get_browser_level_label(2))
+            row.operator("sf.refresh_scene_and_cut_cache", text="", icon="FILE_REFRESH")
+        for index in range(3, MAX_BROWSER_LEVELS + 1):
+            level = get_browser_level_definition(index)
+            if not level:
+                continue
+            row = box.row()
+            row.prop(my_tool, f"browser_level_{index}", text=get_browser_level_label(index))
+            row.operator("sf.refresh_scene_and_cut_cache", text="", icon="FILE_REFRESH")
         row = box.row()
         row.prop(my_tool, "blend_file")
         row.operator("file.open_cut_folder", text="", icon='FILE_FOLDER')
@@ -9335,20 +12505,31 @@ class SF_OT_ToggleAllOperator(bpy.types.Operator):
 
 def auto_set_browser_fields():
     import bpy, os
-    filepath = bpy.data.filepath.replace("\\", "/")
+    filepath = (_pending_browser_focus_filepath or bpy.data.filepath).replace("\\", "/")
     if not filepath:
+        return
+
+    if sync_browser_to_filepath(bpy.context, filepath, save_state=True):
+        schedule_browser_sync(filepath, delay=0.2)
         return
 
     scene_number = ""
     cut_number = ""
+    level_values = extract_browser_level_values_from_root_relative_path(filepath)
+    if level_values:
+        scene_number = level_values[0] if len(level_values) >= 1 else ""
+        cut_number = level_values[1] if len(level_values) >= 2 else scene_number
 
-    path_match = re.search(r"/scenes/([^/]+)/([^/]+)/ren/", filepath)
-    if path_match:
-        scene_number, cut_number = path_match.groups()
-    else:
-        file_match = re.search(r"_([0-9]{4})_([0-9]{4})_ren_", os.path.basename(filepath))
-        if file_match:
-            scene_number, cut_number = file_match.groups()
+    if not scene_number or not cut_number:
+        scene_root_name = re.escape(get_project_scene_root_dir().strip("/\\"))
+        work_dirs_pattern = "|".join(re.escape(name.strip("/\\")) for name in get_scene_work_dir_names())
+        path_match = re.search(rf"/{scene_root_name}/([^/]+)/([^/]+)/({work_dirs_pattern})/", filepath)
+        if path_match:
+            scene_number, cut_number, _work_dir_name = path_match.groups()
+        else:
+            file_match = re.search(rf"_([0-9]{{4}})_([0-9]{{4}})_({work_dirs_pattern})_", os.path.basename(filepath))
+            if file_match:
+                scene_number, cut_number, _work_dir_name = file_match.groups()
 
     if not scene_number or not cut_number:
         return
@@ -9361,23 +12542,23 @@ def auto_set_browser_fields():
     scene = bpy.context.scene
     if hasattr(scene, "my_tool"):
         props = scene.my_tool
-        props.scene_number = scene_number
-        props.cut_number   = cut_number
+        safe_set_enum_property(props, "scene_number", get_cached_scenes(), preferred_value=scene_number, fallback_identifier="NO_SCENES")
+        safe_set_enum_property(props, "cut_number", get_cached_cuts(scene_number), preferred_value=cut_number, fallback_identifier="NO_CUTS")
+        for index in range(3, MAX_BROWSER_LEVELS + 1):
+            level_items = get_browser_level_items(index, bpy.context)
+            preferred_value = level_values[index - 1] if len(level_values) >= index else ""
+            safe_set_enum_property(props, f"browser_level_{index}", level_items, preferred_value=preferred_value, fallback_identifier=f"NO_LEVEL{index}")
 
         # --- blend_file Enum 값 파싱 ---
-        tokens = blend_file_noext.split("_")
-        enum_value = "_".join(tokens[-2:]) if len(tokens) >= 2 else blend_file_noext
+        enum_value = find_blend_file_enum_value(scene_number, cut_number, bpy.data.filepath, bpy.context)
 
         # --- 실제 Enum 목록에 있는 경우만 대입 ---
-        if hasattr(props, "blend_file_items"):
-            enum_items = [i[0] for i in props.blend_file_items]
-            if enum_value in enum_items:
-                props.blend_file = enum_value
-                print(f"[AUTOSET] blend_file set to '{enum_value}'")
-            else:
-                print(f"[WARN] enum '{enum_value}' not in {enum_items}")
+        if enum_value:
+            props.blend_file = enum_value
+            print(f"[AUTOSET] blend_file set to '{enum_value}'")
         else:
-            props.blend_file = enum_value  # fallback (enum_items 없음)
+            set_blend_file_to_first_available(bpy.context)
+            print(f"[AUTOSET][WARN] blend file enum could not be resolved for '{blend_file_name}'")
 
         save_recent_browser_state(force=True)
 
@@ -9711,6 +12892,11 @@ classes = [
     LineArtGenerator,
     SF_OT_ApplyLineArt,
     MyProperties,
+    SF_ProjectPathSettings,
+    SF_OT_ProjectPathSettingsPopup,
+    SF_OT_PickProjectPath,
+    SF_OT_NewProjectPopup,
+    SF_OT_ValidateProject,
     OpenSceneFolderOperator,
     OpenCutFolderOperator,
     OpenFileOperator,
@@ -9720,6 +12906,9 @@ classes = [
     SF_OT_RenderSetting,
     SF_PT_SceneBrowser,
     SF_PT_MainTabPanel, # 👈 3개 대신 이거 하나만 등록! (Main Tools -> Render Tools)
+    SF_OT_SaveProjectPathSettings,
+    SF_OT_ReloadProjectPathSettings,
+    SF_OT_ResetProjectPathSettings,
     SF_OT_RefreshDriverDependencies,
     SF_OT_GetSelectedAssetsOperator,
     MyProjectSettings1,
@@ -9800,6 +12989,7 @@ _auto_browser_timer = None
 _recent_browser_state_timer = None  # 전역 변수로 선언
 
 def register():
+    ensure_project_config_loaded()
     # ✅ 1. 6개 탭 아이콘 및 순서 재배치 (CACHE ↔ MASK_PASS)
     bpy.types.Scene.sf_active_tab = bpy.props.EnumProperty(
         items=[
@@ -9822,6 +13012,7 @@ def register():
     # ✅ 3. Scene 프로퍼티 및 포인터 연결
     bpy.types.Scene.my_tool = bpy.props.PointerProperty(type=MyProperties)
     bpy.types.Scene.my_project_settings = bpy.props.PointerProperty(type=MyProjectSettings1)
+    bpy.types.Scene.sf_project_paths = bpy.props.PointerProperty(type=SF_ProjectPathSettings)
     bpy.types.Scene.simple_scene_props = bpy.props.PointerProperty(type=SimpleSceneProps)
     bpy.types.Scene.sf_scene_number = bpy.props.StringProperty(name="Scene Number", default="0010")
     bpy.types.Scene.sf_cut_number = bpy.props.StringProperty(name="Cut Number", default="0010")
@@ -9840,8 +13031,10 @@ def register():
     # ✅ 4. 메뉴 및 핸들러 등록
     bpy.types.TOPBAR_MT_render.append(menu_func)
 
-    if run_set_scene_from_file not in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.append(run_set_scene_from_file)
+    try:
+        load_project_path_settings_to_ui(bpy.context)
+    except Exception as e:
+        print(f"[ProjectConfig][WARN] UI init failed: {e}")
 
     _auto_browser_timer = bpy.app.timers.register(auto_set_browser_fields, first_interval=0.5)
     _recent_browser_state_timer = bpy.app.timers.register(restore_recent_browser_state, first_interval=0.8)
@@ -9884,6 +13077,7 @@ def unregister():
         "sf_active_tab",      # <--- 새로 생긴 6개 탭 변수 삭제 추가!
         "my_tool",
         "my_project_settings",
+        "sf_project_paths",
         "simple_scene_props",
         "sf_scene_number",
         "sf_cut_number",
@@ -9911,24 +13105,17 @@ def unregister():
 
 def load_post_handler(dummy):
     import bpy
-    filepath = bpy.data.filepath
-    scene_number, cut_number = extract_scene_cut_from_filename(filepath)
+    filepath = _pending_browser_focus_filepath or bpy.data.filepath
+    if sync_browser_to_filepath(bpy.context, filepath, save_state=True):
+        print(f"[LOAD] 브라우저 동기화 완료: {os.path.basename(filepath)}")
+        schedule_browser_sync(filepath, delay=0.2)
 
-    if scene_number and cut_number:
-        scene = bpy.context.scene
-        if hasattr(scene, "my_tool") and hasattr(scene.my_tool, "scene_number") and hasattr(scene.my_tool, "cut_number"):
-            scene.my_tool.scene_number = scene_number
-            scene.my_tool.cut_number = cut_number
-            save_recent_browser_state(force=True)
-            print(f"[LOAD] 씬/컷 자동 설정됨: {scene_number} / {cut_number}")
-
-            # ✅ UI 강제 새로고침 (기존 PROPERTIES 뿐만 아니라 VIEW_3D 창도 새로고침!)
-            for window in bpy.context.window_manager.windows:
-                for area in window.screen.areas:
-                    if area.type in {'PROPERTIES', 'VIEW_3D'}:
-                        area.tag_redraw()
-        else:
-            print("[LOAD] my_tool 속성 또는 필드가 없음: 씬/컷 설정 생략됨.")
+        for window in bpy.context.window_manager.windows:
+            for area in window.screen.areas:
+                if area.type in {'PROPERTIES', 'VIEW_3D'}:
+                    area.tag_redraw()
+    else:
+        print("[LOAD] 현재 파일 기준 브라우저 동기화 생략됨.")
 # 핸들러 중복 방지 후 append
 for h in bpy.app.handlers.load_post:
     if h.__name__ == 'load_post_handler':
