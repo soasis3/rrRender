@@ -1272,24 +1272,22 @@ def get_expected_camera_names(scene_number=None, cut_number=None):
     prefix = get_project_prefix()
     if not scene or scene == "N/A":
         return []
-    if not cut or cut == "N/A":
-        return []
     names = []
 
-    if scene and cut and cut != "N/A":
+    if cut and cut != "N/A":
         names.extend([
             f"{scene}_{cut}",
             f"{scene}_{cut}".lower(),
             f"cam_{scene}_{cut}",
             f"{prefix}_{scene}_{cut}_cam",
         ])
-    elif scene:
-        names.extend([
-            scene,
-            scene.lower(),
-            f"cam_{scene}",
-            f"{prefix}_{scene}_cam",
-        ])
+
+    names.extend([
+        scene,
+        scene.lower(),
+        f"cam_{scene}",
+        f"{prefix}_{scene}_cam",
+    ])
 
     unique_names = []
     for name in names:
@@ -3256,19 +3254,24 @@ def update_camera_name(scene_number, cut_number):
     camera = get_scene_cut_camera()
     if not camera:
         return None
-    expected_camera_name = get_expected_camera_names(scene_number, cut_number)[0]
     camera_compare_name = strip_namespace_and_path(camera)
-    if camera and camera_compare_name.lower() != expected_camera_name.lower():
+    expected_camera_names = get_expected_camera_names(scene_number, cut_number)
+    expected_lower = [name.lower() for name in expected_camera_names]
+    if camera_compare_name.lower() in expected_lower:
+        return camera
+
+    preferred_camera_name = f"cam_{scene_number}_{cut_number}" if cut_number else f"cam_{scene_number}"
+    if camera and camera_compare_name.lower() != preferred_camera_name.lower():
         result = cmds.confirmDialog(
             title='카메라 이름 수정',
-            message=f"카메라 이름이 파일 이름과 일치하지 않습니다. 수정할까요?\n기존 이름: {camera_compare_name}\n새 이름: {expected_camera_name}",
+            message=f"카메라 이름이 파일 이름과 일치하지 않습니다. 수정할까요?\n기존 이름: {camera_compare_name}\n새 이름: {preferred_camera_name}",
             button=['OK', 'Cancel'],
             defaultButton='OK',
             cancelButton='Cancel'
         )
         if result == 'OK':
-            cmds.rename(camera, expected_camera_name)
-            return expected_camera_name
+            cmds.rename(camera, preferred_camera_name)
+            return preferred_camera_name
     return camera
 
 def normalize_path(path):

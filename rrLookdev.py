@@ -136,15 +136,15 @@ def get_assets_root(project, category):
     base_path = get_project_path(project)
     if is_coc_project(project):
         return base_path
-    return os.path.join(base_path, "assets", category)
+    return os.path.join(base_path, category)
 
 def get_asset_folder_path(project, category, asset, process=None):
     base_path = get_project_path(project)
     if is_coc_project(project):
         return os.path.join(base_path, asset)
     if process == "Fin" or not process:
-        return os.path.join(base_path, "assets", category, asset)
-    return os.path.join(base_path, "assets", category, asset, process)
+        return os.path.join(base_path, category, asset)
+    return os.path.join(base_path, category, asset, process)
 
 def get_asset_file_path(project, category, asset, process, selected_file=None):
     if is_coc_project(project):
@@ -155,9 +155,9 @@ def get_asset_file_path(project, category, asset, process, selected_file=None):
 
     base_path = get_project_path(project)
     if process == "Fin":
-        return os.path.join(base_path, "assets", category, asset, f"{asset}.mb")
+        return os.path.join(base_path, category, asset, f"{asset}.mb")
     if selected_file:
-        return os.path.join(base_path, "assets", category, asset, process, selected_file)
+        return os.path.join(base_path, category, asset, process, selected_file)
     return None
 
 def get_scene_export_info(current_file_path):
@@ -859,7 +859,7 @@ def refresh_dropdowns():
         cmds.optionMenu(processMenuName, e=True, v=process)
     
     # 파일 메뉴 업데이트
-    file_path = os.path.join(get_project_path(project_name), "assets", category, asset, process)
+    file_path = os.path.join(get_project_path(project_name), category, asset, process)
     update_file_menu(file_path)
 
 def set_option_menu_value_safe(menu, value):
@@ -871,40 +871,42 @@ def set_option_menu_value_safe(menu, value):
 
     
 def parse_scene_path(path):
-    parts = path.replace("\\", "/").split("/")
-    normalized_path = path.replace("\\", "/").lower()
-    coc_root = get_project_path(COC_PROJECT).replace("\\", "/").rstrip("/").lower()
+    normalized_path = path.replace("\\", "/")
+    coc_root = get_project_path(COC_PROJECT).replace("\\", "/").rstrip("/")
 
-    if normalized_path.startswith(coc_root + "/"):
-        rel_parts = path.replace("\\", "/")[len(coc_root):].strip("/").split("/")
+    if normalized_path.lower().startswith(coc_root.lower() + "/"):
+        rel_path = normalized_path[len(coc_root):].strip("/")
+        rel_parts = [part for part in rel_path.split("/") if part]
         if len(rel_parts) >= 2:
             asset = rel_parts[0]
             version = os.path.splitext(rel_parts[-1])[0]
             return COC_PROJECT, COC_CATEGORY, asset, "Fin", version
 
     try:
-        drive = parts[0] + "/"  # 예: 'T:/'
-        idx = parts.index("assets")
-        category = parts[idx + 1]
-        asset = parts[idx + 2]
+        project_name = ""
+        matched_root = ""
+        for candidate_name, candidate_root in projects.items():
+            root = str(candidate_root or "").replace("\\", "/").rstrip("/")
+            if root and normalized_path.lower().startswith(root.lower() + "/") and len(root) > len(matched_root):
+                project_name = candidate_name
+                matched_root = root
 
-        file_name = parts[-1]
-        base_name = os.path.splitext(file_name)[0]
+        if not project_name:
+            return None, None, None, None, None
 
-        # Fin이면 process 없이 어셋 바로 하위
-        if base_name == asset:
-            process = "Fin"
-            version = base_name
-        else:
-            process = parts[idx + 3]
-            version = os.path.splitext(file_name)[0]
+        rel_path = normalized_path[len(matched_root):].strip("/")
+        rel_parts = [part for part in rel_path.split("/") if part]
+        if len(rel_parts) < 2:
+            return None, None, None, None, None
 
-        project_mapping = {v: k for k, v in projects.items()}
-        project_name = project_mapping.get(drive, None)
+        category = rel_parts[0]
+        asset = rel_parts[1]
+        process = rel_parts[2] if len(rel_parts) >= 3 else "Fin"
+        version = os.path.splitext(rel_parts[-1])[0]
 
         return project_name, category, asset, process, version
     except Exception as e:
-        cmds.warning(f"[❌] 경로 파싱 실패: {e}")
+        cmds.warning(f"[Lookdev Parse] Path parse failed: {e}")
         return None, None, None, None, None
 
 def update_dropdowns_from_scene_path(*args):
@@ -1072,8 +1074,8 @@ def update_process_menu():
         save_maya_ldv_state(cmds.optionMenu(projectMenuName, q=True, v=True))
         return
 
-    fin_file_mb = os.path.join(base_path, "assets", selected_category, selected_asset, f"{selected_asset}.mb")
-    fin_file_ma = os.path.join(base_path, "assets", selected_category, selected_asset, f"{selected_asset}.ma")
+    fin_file_mb = os.path.join(base_path, selected_category, selected_asset, f"{selected_asset}.mb")
+    fin_file_ma = os.path.join(base_path, selected_category, selected_asset, f"{selected_asset}.ma")
 
     selected_process = "Fin" if (os.path.exists(fin_file_mb) or os.path.exists(fin_file_ma)) else "mod"
 
@@ -1099,18 +1101,22 @@ def update_file_menu(*args):
                            key=lambda x: os.path.getmtime(os.path.join(files_path, x)), reverse=True)
             for file in files:
                 cmds.menuItem(parent=fileMenuName, label=file)
+            if files:
+                set_option_menu_value_safe(fileMenuName, files[0])
     elif selected_process == "Fin":
-        files_path = os.path.join(base_path, "assets", selected_category, selected_asset)
+        files_path = os.path.join(base_path, selected_category, selected_asset)
         expected_file = f"{selected_asset}.mb"
         expected_file_ma = f"{selected_asset}.ma"
 
         clear_option_menu_items(fileMenuName)
         if os.path.exists(os.path.join(files_path, expected_file)):
             cmds.menuItem(parent=fileMenuName, label=expected_file)
+            set_option_menu_value_safe(fileMenuName, expected_file)
         elif os.path.exists(os.path.join(files_path, expected_file_ma)):
             cmds.menuItem(parent=fileMenuName, label=expected_file_ma)
+            set_option_menu_value_safe(fileMenuName, expected_file_ma)
     else:
-        files_path = os.path.join(base_path, "assets", selected_category, selected_asset, selected_process)
+        files_path = os.path.join(base_path, selected_category, selected_asset, selected_process)
         if os.path.exists(files_path):
             files = sorted([f for f in os.listdir(files_path)
                             if os.path.isfile(os.path.join(files_path, f)) and (f.endswith(".mb") or f.endswith(".ma"))],
@@ -1118,6 +1124,8 @@ def update_file_menu(*args):
             clear_option_menu_items(fileMenuName)
             for file in files:
                 cmds.menuItem(parent=fileMenuName, label=file)
+            if files:
+                set_option_menu_value_safe(fileMenuName, files[0])
         else:
             clear_option_menu_items(fileMenuName)
 
@@ -1142,11 +1150,11 @@ def load_selected_asset(action):
             cmds.warning("No file selected.")
             return
     elif selected_process == 'Fin':
-        asset_path = os.path.join(base_path, "assets", selected_category, selected_asset, f"{selected_asset}.mb")
+        asset_path = os.path.join(base_path, selected_category, selected_asset, f"{selected_asset}.mb")
     else:
         # 파일 메뉴에서 선택된 파일 확인
         if selected_file:
-            asset_path = os.path.join(base_path, "assets", selected_category, selected_asset, selected_process, selected_file)
+            asset_path = os.path.join(base_path, selected_category, selected_asset, selected_process, selected_file)
         else:
             # 'Fin' 이외의 프로세스 선택 시 파일 선택이 필요
             cmds.warning("No file selected.")
@@ -1868,9 +1876,9 @@ def open_selected_asset_folder():
     if is_coc_project(selected_project):
         folder_path = get_asset_folder_path(selected_project, selected_category, selected_asset)
     elif selected_process == "Fin":
-        folder_path = os.path.join(base_path, "assets", selected_category, selected_asset)
+        folder_path = os.path.join(base_path, selected_category, selected_asset)
     else:
-        folder_path = os.path.join(base_path, "assets", selected_category, selected_asset, selected_process)
+        folder_path = os.path.join(base_path, selected_category, selected_asset, selected_process)
 
     if os.path.exists(folder_path):
         os.startfile(folder_path)
