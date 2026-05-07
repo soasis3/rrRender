@@ -1173,6 +1173,21 @@ def clear_option_menu_items(option_menu):
         for item in menu_items:
             cmds.deleteUI(item)
 
+
+def get_option_menu_labels(option_menu):
+    menu_items = cmds.optionMenu(option_menu, q=True, itemListLong=True) or []
+    return [cmds.menuItem(item, q=True, label=True) for item in menu_items]
+
+
+def set_option_menu_value_if_exists(option_menu, value):
+    if not value:
+        return False
+    labels = get_option_menu_labels(option_menu)
+    if value in labels:
+        cmds.optionMenu(option_menu, e=True, value=value)
+        return True
+    return False
+
 def get_subfolder_names(directory, exclude_word='light'):
     try:
         subfolders = [name for name in os.listdir(directory) 
@@ -1184,14 +1199,15 @@ def get_subfolder_names(directory, exclude_word='light'):
 
 def refresh_project_asset_names():
     global CHARACTER_NAMES, BG_NAMES, PROP_NAMES
-    character_dir = get_asset_category_root("ch", current_project)
-    CHARACTER_NAMES = get_subfolder_names(character_dir)
-
     if is_character_only_project(current_project):
+        coc_asset_root = get_asset_category_root("ch", current_project)
+        CHARACTER_NAMES = get_subfolder_names(coc_asset_root)
         BG_NAMES = []
         PROP_NAMES = []
         return
 
+    character_dir = get_asset_category_root("ch", current_project)
+    CHARACTER_NAMES = get_subfolder_names(character_dir)
     background_dir = get_asset_category_root("bg", current_project)
     prop_dir = get_asset_category_root("prop", current_project)
     BG_NAMES = get_subfolder_names(background_dir)
@@ -3957,39 +3973,29 @@ def restore_browser_state():
 
     try:
         # 프로젝트 먼저 세팅
-        cmds.optionMenu(projectMenuName, edit=True, value=state["project"])
+        restored_project = normalize_project_name(state.get("project", current_project))
+        if not set_option_menu_value_if_exists(projectMenuName, restored_project):
+            fallback_project = normalize_project_name(current_project)
+            set_option_menu_value_if_exists(projectMenuName, fallback_project)
         update_scenes()
 
         # 씬 세팅 (존재 여부 확인)
-        scene_items = cmds.optionMenu("sceneMenu", q=True, itemListLong=True) or []
-        if scene_items:
-            labels = [cmds.menuItem(i, q=True, label=True) for i in scene_items]
-            if state["scene"] in labels:
-                cmds.optionMenu("sceneMenu", e=True, value=state["scene"])
-        update_cuts(selected_scene=state["scene"])
+        restored_scene = state.get("scene", "")
+        set_option_menu_value_if_exists("sceneMenu", restored_scene)
+        update_cuts(selected_scene=restored_scene)
 
         # 컷 세팅
-        cut_items = cmds.optionMenu("cutMenu", q=True, itemListLong=True) or []
-        if cut_items:
-            labels = [cmds.menuItem(i, q=True, label=True) for i in cut_items]
-            if state["cut"] in labels:
-                cmds.optionMenu("cutMenu", e=True, value=state["cut"])
-        update_processes(selected_cut=state["cut"])
+        restored_cut = state.get("cut", "")
+        set_option_menu_value_if_exists("cutMenu", restored_cut)
+        update_processes(selected_cut=restored_cut)
 
         # 프로세스 세팅
-        proc_items = cmds.optionMenu("processMenu", q=True, itemListLong=True) or []
-        if proc_items:
-            labels = [cmds.menuItem(i, q=True, label=True) for i in proc_items]
-            if state["process"] in labels:
-                cmds.optionMenu("processMenu", e=True, value=state["process"])
-        update_files(selected_process=state["process"])
+        restored_process = state.get("process", "")
+        set_option_menu_value_if_exists("processMenu", restored_process)
+        update_files(selected_process=restored_process)
 
         # 파일 세팅
-        file_items = cmds.optionMenu("fileMenu", q=True, itemListLong=True) or []
-        if file_items:
-            labels = [cmds.menuItem(i, q=True, label=True) for i in file_items]
-            if state["file"] in labels:
-                cmds.optionMenu("fileMenu", e=True, value=state["file"])
+        set_option_menu_value_if_exists("fileMenu", state.get("file", ""))
 
         # print("[AnimOut] 상태 복원 완료")
 
