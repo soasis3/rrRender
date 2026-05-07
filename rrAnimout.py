@@ -1286,22 +1286,7 @@ def get_expected_camera_names(scene_number=None, cut_number=None):
         if not base_name:
             return []
 
-        tokens = [base_name]
-        stripped = re.sub(r'_(rig|fin|lookdev|ldv|usd|pub|publish|v\d+)$', '', base_name, flags=re.IGNORECASE)
-        if stripped and stripped != base_name:
-            tokens.append(stripped)
-
-        for token in list(tokens):
-            if token.lower().startswith("cam_"):
-                tokens.append(token[4:])
-            else:
-                tokens.append(f"cam_{token}")
-
-        unique_names = []
-        for name in tokens:
-            if name and name not in unique_names:
-                unique_names.append(name)
-        return unique_names
+        return [base_name, f"cam_{base_name}"]
 
     if scene_number is None or cut_number is None:
         scene_number, cut_number = get_scene_and_cut()
@@ -1357,10 +1342,7 @@ def get_scene_cut_camera():
         name_lower = transform_no_namespace.lower()
 
         if is_character_only_project(current_project):
-            if any(
-                candidate in name_lower or name_lower in candidate
-                for candidate in expected_lower
-            ):
+            if name_lower in expected_lower:
                 return transform
 
         if name_lower in expected_lower:
@@ -4045,33 +4027,29 @@ def rrAnimout_UI():
     # 전체 루트 columnLayout
     cmds.columnLayout("rootLayout", adjustableColumn=False, backgroundColor=[0.26, 0.26, 0.26])
 
-    # 제목
-    cmds.frameLayout(lv=0, w=302)
-    cmds.frameLayout(lv=0, w=300, mh=5, mw=10)
-    cmds.text(label="SF ANIMOUT_test", align='center', height=28, enableBackground=False)
+    # 제목 + 상단 컨트롤
+    cmds.frameLayout(lv=0, w=302, mh=0, mw=0, backgroundColor=[0.26, 0.26, 0.26])
+    cmds.columnLayout(adjustableColumn=False, backgroundColor=[0.26, 0.26, 0.26], co=('both', 0), rs=0)
+    cmds.text(label="SF ANIMOUT_test", align='center', height=24, enableBackground=False)
     if can_show_deploy_tools():
-        cmds.rowLayout(numberOfColumns=2, columnWidth2=[138, 138], columnAlign=[(1, 'center'), (2, 'center')])
-        cmds.button(label="Reload", height=24, width=138, backgroundColor=[0.32, 0.36, 0.36], command=reload_rranimout)
-        cmds.button(label="Deploy", height=24, width=138, backgroundColor=[0.36, 0.32, 0.32], command=deploy_rranimout)
+        cmds.rowLayout(numberOfColumns=2, columnWidth2=[151, 151], columnAlign=[(1, 'center'), (2, 'center')])
+        cmds.button(label="Reload", height=24, width=151, backgroundColor=[0.32, 0.36, 0.36], command=reload_rranimout)
+        cmds.button(label="Deploy", height=24, width=151, backgroundColor=[0.36, 0.32, 0.32], command=deploy_rranimout)
         cmds.setParent('..')
-    cmds.setParent('..')
-    cmds.setParent('..')
-
     global projectMenuName
     current_project = get_current_project()
     set_current_project(current_project)
-
-    # SCENE BROWSER
-    cmds.frameLayout(cll=1, lv=1, l='SCENE BROWSER', fn="smallPlainLabelFont", mh=0, mw=8, backgroundColor=[0.26, 0.26, 0.26])
-    cmds.columnLayout(adjustableColumn=False, backgroundColor=[0.29, 0.29, 0.29], co=('both', 3), rs=3)
-    cmds.separator(height=1, style='none')
-
-    cmds.rowLayout(numberOfColumns=2, columnWidth2=[50, 250], columnAlign=[(1, 'center'), (2, 'center')])
     projectMenuName = cmds.optionMenu(label="", height=30, width=276, changeCommand=update_project_settings, backgroundColor=[0.35, 0.35, 0.35])
     for project_name in get_project_names():
         cmds.menuItem(label=project_name)
     cmds.optionMenu(projectMenuName, edit=True, value=current_project, changeCommand=update_scenes)
     cmds.setParent('..')
+    cmds.setParent('..')
+
+    # SCENE BROWSER
+    cmds.frameLayout(cll=1, lv=1, l='SCENE BROWSER', fn="smallPlainLabelFont", mh=0, mw=8, backgroundColor=[0.26, 0.26, 0.26])
+    cmds.columnLayout(adjustableColumn=False, backgroundColor=[0.29, 0.29, 0.29], co=('both', 3), rs=3)
+    cmds.separator(height=1, style='none')
 
     cmds.rowLayout(numberOfColumns=3, columnWidth3=[90, 91, 91], columnAlign=[(1, 'center'), (2, 'center'), (3, 'center')])
     cmds.text(label="SCENE", height=20, width=90)
