@@ -334,416 +334,401 @@ def get_uv_data_from_file_node(file_node):
                 uv_data[attr] = cmds.getAttr(f"{place2d}.{attr}")
     return uv_data
 
+
 def export_usd():
-    import json
-    import os
-    import shutil
-    import re
-    import maya.cmds as cmds
+        import json
+        import os
+        import shutil
+        import re
+        import maya.cmds as cmds
 
-    START_FRAME = 1
-    END_FRAME = 5
-    BEND_AMOUNT = 0.001   # 필요하면 0.01로 올려 테스트
-    APPLY_BEND_FOR = ['ch', 'prop', 'bg']
+        START_FRAME = 1
+        END_FRAME = 5
+        BEND_AMOUNT = 0.001
+        APPLY_BEND_FOR = ['ch', 'prop', 'bg']
 
-    def _export_static_snapshot_usd(target_geo, usd_path, asset_name):
-        usd_options = (
-            f'exportUVs=1;'
-            f'exportSkels=none;'
-            f'exportSkin=none;'
-            f'exportBlendShapes=0;'
-            f'exportDisplayColor=0;'
-            f'filterTypes=nurbsCurve;'
-            f'exportColorSets=0;'
-            f'defaultMeshScheme=none;'
-            f'animation=0;'
-            f'defaultUSDFormat=usdc;'
-            f'exportInstances=1;'
-            f'exportVisibility=1;'
-            f'mergeTransformAndShape=1;'
-            f'stripNamespaces=0;'
-            f'parentScope=/{asset_name};'
-        )
-        cmds.select(target_geo, r=True)
-        cmds.file(usd_path, force=True, options=usd_options, typ="USD Export", pr=True, es=True)
+        def _export_static_snapshot_usd(target_geo, usd_path, asset_name):
+            mesh_shapes = cmds.listRelatives(target_geo, allDescendents=True, type='mesh', fullPath=True) or []
+            mesh_transforms = []
+            for mesh_shape in mesh_shapes:
+                parents = cmds.listRelatives(mesh_shape, parent=True, fullPath=True) or []
+                if parents:
+                    mesh_transforms.append(parents[0])
+            mesh_transforms = list(dict.fromkeys(mesh_transforms))
 
-    def _combine_two_static_usd_to_animated(usd_f1, usd_f5, usd_out):
-        from pxr import Usd, UsdGeom
+            if not mesh_transforms:
+                raise RuntimeError(f'No mesh transforms found under {target_geo}')
 
-        shutil.copy(usd_f1, usd_out)
+            usd_options = (
+                f'exportUVs=1;'
+                f'exportSkels=none;'
+                f'exportSkin=none;'
+                f'exportBlendShapes=0;'
+                f'exportDisplayColor=0;'
+                f'filterTypes=nurbsCurve;'
+                f'exportColorSets=0;'
+                f'defaultMeshScheme=none;'
+                f'animation=0;'
+                f'defaultUSDFormat=usdc;'
+                f'exportInstances=1;'
+                f'exportVisibility=1;'
+                f'mergeTransformAndShape=1;'
+                f'stripNamespaces=0;'
+                f'rootPrim=/{asset_name};'
+            )
+            cmds.select(mesh_transforms, r=True)
+            cmds.file(usd_path, force=True, options=usd_options, typ='USD Export', pr=True, es=True)
 
-        stage_out = Usd.Stage.Open(usd_out)
-        stage_f1 = Usd.Stage.Open(usd_f1)
-        stage_f5 = Usd.Stage.Open(usd_f5)
+        def _find_export_geo_node(asset_name):
+            preferred_paths = [
+                f'|{asset_name}|Geometry|{asset_name}',
+                f'|{asset_name}|geo|{asset_name}',
+                f'|{asset_name}|Geometry|geo',
+                f'|{asset_name}|geo',
+            ]
+            for path in preferred_paths:
+                if cmds.objExists(path):
+                    return path
 
-        if not stage_out or not stage_f1 or not stage_f5:
-            raise RuntimeError("USD stage open failed")
+            scored = []
+            for node in cmds.ls(type='transform', long=True) or []:
+                meshes = cmds.listRelatives(node, allDescendents=True, type='mesh', fullPath=True) or []
+                if not meshes:
+                    continue
 
-        stage_out.SetStartTimeCode(START_FRAME)
-        stage_out.SetEndTimeCode(END_FRAME)
+                short_name = node.split('|')[-1].lower()
+                score = 0
+                if short_name == asset_name.lower():
+                    score += 80
+                if asset_name.lower() in short_name:
+                    score += 30
+                if 'geometry' in node.lower() or '|geo|' in node.lower():
+                    score += 40
+                if short_name.endswith('_geo'):
+                    score += 20
+                if short_name.endswith('_model'):
+                    score += 10
+                score -= node.count('|')
+                scored.append((score, node))
 
-        mesh_count = 0
+            if scored:
+                scored.sort(key=lambda item: item[0], reverse=True)
+                return scored[0][1]
 
-        for prim in stage_out.Traverse():
-            if prim.GetTypeName() != "Mesh":
-                continue
+            return None
 
-            path = prim.GetPath()
-            prim_f1 = stage_f1.GetPrimAtPath(path)
-            prim_f5 = stage_f5.GetPrimAtPath(path)
+        def _combine_two_static_usd_to_animated(usd_f1, usd_f5, usd_out):
+            from pxr import Usd, UsdGeom
 
-            if not prim_f1 or not prim_f5:
-                print(f"[WARN] mesh path missing in snapshot stages: {path}")
-                continue
+            shutil.copy(usd_f1, usd_out)
 
-            mesh_out = UsdGeom.Mesh(prim)
-            mesh_f1 = UsdGeom.Mesh(prim_f1)
-            mesh_f5 = UsdGeom.Mesh(prim_f5)
+            stage_out = Usd.Stage.Open(usd_out)
+            stage_f1 = Usd.Stage.Open(usd_f1)
+            stage_f5 = Usd.Stage.Open(usd_f5)
 
-            pts1 = mesh_f1.GetPointsAttr().Get()
-            pts5 = mesh_f5.GetPointsAttr().Get()
+            if not stage_out or not stage_f1 or not stage_f5:
+                raise RuntimeError('USD stage open failed')
 
-            if pts1 is None or pts5 is None:
-                print(f"[WARN] points missing on mesh: {path}")
-                continue
+            stage_out.SetStartTimeCode(START_FRAME)
+            stage_out.SetEndTimeCode(END_FRAME)
 
-            points_attr = mesh_out.GetPointsAttr()
-            points_attr.Set(pts1, START_FRAME)
-            points_attr.Set(pts5, END_FRAME)
+            mesh_count = 0
 
-            # normals도 있으면 같이 time sample
-            normals1 = mesh_f1.GetNormalsAttr().Get()
-            normals5 = mesh_f5.GetNormalsAttr().Get()
-            if normals1 is not None and normals5 is not None:
-                normals_attr = mesh_out.GetNormalsAttr()
-                normals_attr.Set(normals1, START_FRAME)
-                normals_attr.Set(normals5, END_FRAME)
+            for prim in stage_out.Traverse():
+                if prim.GetTypeName() != 'Mesh':
+                    continue
 
-            mesh_count += 1
+                path = prim.GetPath()
+                prim_f1 = stage_f1.GetPrimAtPath(path)
+                prim_f5 = stage_f5.GetPrimAtPath(path)
 
-        stage_out.GetRootLayer().Save()
-        print(f"[DEBUG] animated USD mesh samples written: {mesh_count}")
+                if not prim_f1 or not prim_f5:
+                    print(f'[WARN] mesh path missing in snapshot stages: {path}')
+                    continue
 
-    # ------------------------------------------------------------
-    # 현재 파일 / 경로 파싱
-    # ------------------------------------------------------------
-    current_file_path = cmds.file(q=True, sn=True)
-    if not current_file_path:
-        cmds.warning("[❌] 현재 열린 Maya 파일이 없습니다.")
-        return False
-    project_drive, category, asset_name, final_dir = get_scene_export_info(current_file_path)
-    path_parts = [project_drive]
-    if not all([project_drive, category, asset_name, final_dir]):
-        cmds.warning("[❌] 파일 경로가 올바르지 않습니다. (Project/assets/category/assetName 형식 필요)")
-        return False
+                mesh_out = UsdGeom.Mesh(prim)
+                mesh_f1 = UsdGeom.Mesh(prim_f1)
+                mesh_f5 = UsdGeom.Mesh(prim_f5)
 
-    project_drive = path_parts[0]   # 예: T:
-    path_parts = [project_drive]
-    print("\n" + "=" * 80)
-    print("[USD EXPORT] START")
-    print(f"[INFO] current file : {current_file_path}")
-    print(f"[INFO] project drive: {project_drive}")
-    print(f"[INFO] category     : {category}")
-    print(f"[INFO] asset name   : {asset_name}")
-    print("=" * 80)
+                pts1 = mesh_f1.GetPointsAttr().Get()
+                pts5 = mesh_f5.GetPointsAttr().Get()
 
-    # mayaUsdPlugin 체크
-    try:
-        if cmds.pluginInfo("mayaUsdPlugin", q=True, loaded=True):
-            print("[DEBUG] mayaUsdPlugin already loaded")
-        else:
-            cmds.loadPlugin("mayaUsdPlugin")
-            print("[DEBUG] mayaUsdPlugin loaded")
-    except Exception as e:
-        cmds.warning(f"[❌] mayaUsdPlugin 로드 실패: {e}")
-        return False
+                if pts1 is None or pts5 is None:
+                    print(f'[WARN] points missing on mesh: {path}')
+                    continue
 
-    if project_drive == COC_PROJECT:
-        geo_node = find_coc_export_geo_node(asset_name)
-        if not geo_node:
-            cmds.warning(f"[?? '{asset_name}|Geometry' under export mesh group does not exist in the scene.")
+                points_attr = mesh_out.GetPointsAttr()
+                points_attr.Set(pts1, START_FRAME)
+                points_attr.Set(pts5, END_FRAME)
+
+                normals1 = mesh_f1.GetNormalsAttr().Get()
+                normals5 = mesh_f5.GetNormalsAttr().Get()
+                if normals1 is not None and normals5 is not None:
+                    normals_attr = mesh_out.GetNormalsAttr()
+                    normals_attr.Set(normals1, START_FRAME)
+                    normals_attr.Set(normals5, END_FRAME)
+
+                mesh_count += 1
+
+            stage_out.GetRootLayer().Save()
+            print(f'[DEBUG] animated USD mesh samples written: {mesh_count}')
+
+        current_file_path = cmds.file(q=True, sn=True)
+        if not current_file_path:
+            cmds.warning('[LookDev] No current Maya file found.')
             return False
-    else:
-        geo_node = asset_name + "|geo"
-    if not cmds.objExists(geo_node):
-        cmds.warning(f"[❌] '{geo_node}' does not exist in the scene.")
-        return False
 
-    print(f"[INFO] export geo node: {geo_node}")
-    base_geo_name = geo_node.split("|")[-1]
-    temp_original_name = base_geo_name + "_ORIGINAL_TEMP"
+        project_drive, category, asset_name, final_dir = get_scene_export_info(current_file_path)
+        if not all([project_drive, category, asset_name, final_dir]):
+            cmds.warning('[LookDev] Invalid scene path format.')
+            return False
 
-    # 혹시 남아있는 temp 제거
-    if cmds.objExists(temp_original_name):
+        print('\n' + '=' * 80)
+        print('[USD EXPORT] START')
+        print(f'[INFO] current file : {current_file_path}')
+        print(f'[INFO] project drive: {project_drive}')
+        print(f'[INFO] category     : {category}')
+        print(f'[INFO] asset name   : {asset_name}')
+        print('=' * 80)
+
         try:
-            cmds.delete(temp_original_name)
-            print(f"[DEBUG] deleted leftover temp node: {temp_original_name}")
+            if cmds.pluginInfo('mayaUsdPlugin', q=True, loaded=True):
+                print('[DEBUG] mayaUsdPlugin already loaded')
+            else:
+                cmds.loadPlugin('mayaUsdPlugin')
+                print('[DEBUG] mayaUsdPlugin loaded')
         except Exception as e:
-            cmds.warning(f"[❌] leftover temp node 삭제 실패: {e}")
+            cmds.warning(f'[LookDev] mayaUsdPlugin load failed: {e}')
             return False
 
-    # 원본 geo rename
-    try:
-        original_geo_renamed = cmds.rename(geo_node, temp_original_name)
-        print(f"[DEBUG] original geo renamed: {geo_node} -> {original_geo_renamed}")
-    except Exception as e:
-        cmds.warning(f"[❌] geo rename 실패: {e}")
-        return False
+        geo_node = _find_export_geo_node(asset_name)
+        if not geo_node:
+            cmds.warning(f'[LookDev] export geo node not found for asset: {asset_name}')
+            return False
 
-    # duplicate 생성
-    try:
-        duplicated_geo = cmds.duplicate(original_geo_renamed, rr=True, ic=True, name=base_geo_name)[0]
-        print(f"[DEBUG] duplicated geo created: {duplicated_geo}")
-    except Exception as e:
-        cmds.warning(f"[❌] geo duplicate 실패: {e}")
+        print(f'[INFO] export geo node: {geo_node}')
+        base_geo_name = geo_node.split('|')[-1]
+        temp_geo_name = base_geo_name + '_USD_EXPORT_TMP'
+
+        if cmds.objExists(temp_geo_name):
+            try:
+                cmds.delete(temp_geo_name)
+                print(f'[DEBUG] deleted leftover temp node: {temp_geo_name}')
+            except Exception as e:
+                cmds.warning(f'[LookDev] leftover temp delete failed: {e}')
+                return False
+
         try:
-            cmds.rename(temp_original_name, base_geo_name)
-        except:
-            pass
-        return False
+            duplicated_geo = cmds.duplicate(geo_node, rr=True, ic=True, name=temp_geo_name)[0]
+            print(f'[DEBUG] duplicated geo created: {duplicated_geo}')
+        except Exception as e:
+            cmds.warning(f'[LookDev] geo duplicate failed: {e}')
+            return False
 
-    try:
-        cmds.parent(duplicated_geo, world=True)
-        print("[DEBUG] duplicated geo parented to world")
-    except:
-        print("[DEBUG] duplicated geo already in world")
+        try:
+            cmds.parent(duplicated_geo, world=True)
+            print('[DEBUG] duplicated geo parented to world')
+        except Exception:
+            print('[DEBUG] duplicated geo already in world')
 
-    if duplicated_geo != base_geo_name:
-        if cmds.objExists(base_geo_name):
-            try:
-                cmds.delete(base_geo_name)
-            except:
-                pass
-        duplicated_geo = cmds.rename(duplicated_geo, base_geo_name)
-        print(f"[DEBUG] duplicated geo renamed to: {duplicated_geo}")
+        temp_dir = os.path.expanduser('~/Documents/maya')
+        os.makedirs(temp_dir, exist_ok=True)
 
-    # temp / final 경로
-    temp_dir = os.path.expanduser("~/Documents/maya")
-    os.makedirs(temp_dir, exist_ok=True)
+        usd_name = f'{asset_name}.usd'
+        temp_usd_f1 = os.path.normpath(os.path.join(temp_dir, f'{asset_name}__f1.usd'))
+        temp_usd_f5 = os.path.normpath(os.path.join(temp_dir, f'{asset_name}__f5.usd'))
+        temp_usd_anim = os.path.normpath(os.path.join(temp_dir, usd_name))
 
-    usd_name = f"{asset_name}.usd"
-    temp_usd_f1 = os.path.normpath(os.path.join(temp_dir, f"{asset_name}__f1.usd"))
-    temp_usd_f5 = os.path.normpath(os.path.join(temp_dir, f"{asset_name}__f5.usd"))
-    temp_usd_anim = os.path.normpath(os.path.join(temp_dir, usd_name))
-
-    if project_drive == COC_PROJECT:
-        final_dir = os.path.normpath(os.path.join(get_project_path(COC_PROJECT), asset_name, "mod", "usd"))
-    else:
-        final_dir = os.path.normpath(os.path.join(project_drive + "/", "assets", category, asset_name, "mod", "usd"))
-    os.makedirs(final_dir, exist_ok=True)
-
-    final_usd = os.path.normpath(os.path.join(final_dir, usd_name))
-    final_json = os.path.normpath(os.path.splitext(final_usd)[0] + ".json")
-
-    print(f"[INFO] temp usd f1 : {temp_usd_f1}")
-    print(f"[INFO] temp usd f5 : {temp_usd_f5}")
-    print(f"[INFO] temp usd out: {temp_usd_anim}")
-    print(f"[INFO] final usd   : {final_usd}")
-    print(f"[INFO] final json  : {final_json}")
-
-    bend = None
-    handle = None
-
-    # ------------------------------------------------------------
-    # bend를 "애니메이션"으로 쓰지 않고, snapshot 2장만 뽑는다
-    # ------------------------------------------------------------
-    try:
-        if category in APPLY_BEND_FOR:
-            bend, handle = cmds.nonLinear(duplicated_geo, type="bend", name="Bend_Deform_TMP#")
-            bend_attr = bend + ".curvature"
-            print(f"[DEBUG] bend node   : {bend}")
-            print(f"[DEBUG] bend handle : {handle}")
-
-            # frame1 snapshot
-            cmds.setAttr(bend_attr, 0.0)
-            try:
-                cmds.dgdirty(allPlugs=True)
-            except:
-                pass
-            cmds.refresh(force=True)
-            bbox_f1 = cmds.exactWorldBoundingBox(duplicated_geo)
-            print(f"[DEBUG] snapshot f1 bbox : {bbox_f1}")
-            _export_static_snapshot_usd(duplicated_geo, temp_usd_f1, asset_name)
-
-            # frame5 snapshot
-            cmds.setAttr(bend_attr, BEND_AMOUNT)
-            try:
-                cmds.dgdirty(allPlugs=True)
-            except:
-                pass
-            cmds.refresh(force=True)
-            bbox_f5 = cmds.exactWorldBoundingBox(duplicated_geo)
-            print(f"[DEBUG] snapshot f5 bbox : {bbox_f5}")
-            _export_static_snapshot_usd(duplicated_geo, temp_usd_f5, asset_name)
-
-            if bbox_f1 == bbox_f5:
-                print("[WARN] snapshot bbox도 동일함. 이 PC에서는 bend static 평가 자체도 의심해야 함.")
-
-            # 두 static USD를 animated USD로 합치기
-            _combine_two_static_usd_to_animated(temp_usd_f1, temp_usd_f5, temp_usd_anim)
-
+        if project_drive == COC_PROJECT:
+            final_dir = os.path.normpath(os.path.join(get_project_path(COC_PROJECT), asset_name, 'mod', 'usd'))
         else:
-            # bend 대상 아니면 그냥 static export
-            _export_static_snapshot_usd(duplicated_geo, temp_usd_anim, asset_name)
+            final_dir = os.path.normpath(os.path.join(project_drive + '/', 'assets', category, asset_name, 'mod', 'usd'))
+        os.makedirs(final_dir, exist_ok=True)
 
-    except Exception as e:
-        cmds.warning(f"[❌] snapshot USD 생성 실패: {e}")
-        return False
+        final_usd = os.path.normpath(os.path.join(final_dir, usd_name))
+        final_json = os.path.normpath(os.path.splitext(final_usd)[0] + '.json')
 
-    if not os.path.exists(temp_usd_anim):
-        cmds.warning(f"[❌] temp animated USD가 생성되지 않았습니다: {temp_usd_anim}")
-        return False
+        print(f'[INFO] temp usd f1 : {temp_usd_f1}')
+        print(f'[INFO] temp usd f5 : {temp_usd_f5}')
+        print(f'[INFO] temp usd out: {temp_usd_anim}')
+        print(f'[INFO] final usd   : {final_usd}')
+        print(f'[INFO] final json  : {final_json}')
 
-    print(f"[DEBUG] temp animated USD exported: {temp_usd_anim}")
+        mesh_list = []
+        try:
+            if category in APPLY_BEND_FOR:
+                bend, handle = cmds.nonLinear(duplicated_geo, type='bend', name='Bend_Deform_TMP#')
+                bend_attr = bend + '.curvature'
+                print(f'[DEBUG] bend node   : {bend}')
+                print(f'[DEBUG] bend handle : {handle}')
 
-    # ------------------------------------------------------------
-    # JSON 생성
-    # ------------------------------------------------------------
-    mesh_list = cmds.listRelatives(duplicated_geo, allDescendents=True, type="mesh", fullPath=True) or []
-    result_data = {"meshes": []}
+                cmds.setAttr(bend_attr, 0.0)
+                try:
+                    cmds.dgdirty(allPlugs=True)
+                except Exception:
+                    pass
+                cmds.refresh(force=True)
+                bbox_f1 = cmds.exactWorldBoundingBox(duplicated_geo)
+                print(f'[DEBUG] snapshot f1 bbox : {bbox_f1}')
+                _export_static_snapshot_usd(duplicated_geo, temp_usd_f1, asset_name)
 
-    cmds.progressWindow(
-        title='LookDev Export',
-        progress=0,
-        status='Starting JSON export...',
-        isInterruptable=False,
-        maxValue=len(mesh_list)
-    )
+                cmds.setAttr(bend_attr, BEND_AMOUNT)
+                try:
+                    cmds.dgdirty(allPlugs=True)
+                except Exception:
+                    pass
+                cmds.refresh(force=True)
+                bbox_f5 = cmds.exactWorldBoundingBox(duplicated_geo)
+                print(f'[DEBUG] snapshot f5 bbox : {bbox_f5}')
+                _export_static_snapshot_usd(duplicated_geo, temp_usd_f5, asset_name)
 
-    for idx, mesh in enumerate(mesh_list):
-        mesh_name = mesh.split("|")[-1]
-        mesh_info = {"name": mesh_name, "materials": []}
-        shading_grps = cmds.listConnections(mesh, type='shadingEngine') or []
+                if bbox_f1 == bbox_f5:
+                    print('[WARN] snapshot bbox mismatch check needed')
 
-        for sg in shading_grps:
-            materials = cmds.ls(cmds.listConnections(sg + ".surfaceShader"), materials=True) or []
+                _combine_two_static_usd_to_animated(temp_usd_f1, temp_usd_f5, temp_usd_anim)
+            else:
+                _export_static_snapshot_usd(duplicated_geo, temp_usd_anim, asset_name)
+        except Exception as e:
+            cmds.warning(f'[LookDev] snapshot USD export failed: {e}')
+            return False
 
-            for mat in materials:
-                if category in ['bg', 'prop']:
-                    mat_data = {
-                        "name": mat,
-                        "type": "basic",
-                        "Diffuse": None,
-                        "Alpha": None,
-                        "Normal": None,
-                        "textures": {"allTextures": [], "uv": {}}
-                    }
+        try:
+            mesh_list = cmds.listRelatives(duplicated_geo, allDescendents=True, type='mesh', fullPath=True) or []
+        except Exception as e:
+            cmds.warning(f'[LookDev] mesh list build failed: {e}')
+            mesh_list = []
 
-                    for slot in ["color", "transparency", "normalCamera"]:
-                        if cmds.attributeQuery(slot, node=mat, exists=True):
-                            file_nodes = find_all_file_textures(f"{mat}.{slot}")
-                            if file_nodes:
-                                rep_tex = find_lowest_udim_texture(file_nodes)
-                                if rep_tex:
-                                    if slot == "color":
-                                        mat_data["Diffuse"] = rep_tex
-                                    elif slot == "transparency":
-                                        mat_data["Alpha"] = rep_tex
-                                    elif slot == "normalCamera":
-                                        mat_data["Normal"] = rep_tex
+        result_data = {'meshes': []}
+        cmds.progressWindow(
+            title='LookDev Export',
+            progress=0,
+            status='Starting JSON export...',
+            isInterruptable=False,
+            maxValue=len(mesh_list)
+        )
 
-                                    mat_data["textures"]["allTextures"].extend(
-                                        [cmds.getAttr(f"{f}.fileTextureName") for f in file_nodes]
+        for idx, mesh in enumerate(mesh_list):
+            mesh_name = mesh.split('|')[-1]
+            mesh_info = {'name': mesh_name, 'materials': []}
+            shading_grps = cmds.listConnections(mesh, type='shadingEngine') or []
+
+            for sg in shading_grps:
+                materials = cmds.ls(cmds.listConnections(sg + '.surfaceShader'), materials=True) or []
+
+                for mat in materials:
+                    if category in ['bg', 'prop']:
+                        mat_data = {
+                            'name': mat,
+                            'type': 'basic',
+                            'Diffuse': None,
+                            'Alpha': None,
+                            'Normal': None,
+                            'textures': {'allTextures': [], 'uv': {}}
+                        }
+
+                        for slot in ['color', 'transparency', 'normalCamera']:
+                            if cmds.attributeQuery(slot, node=mat, exists=True):
+                                file_nodes = find_all_file_textures(f'{mat}.{slot}')
+                                if file_nodes:
+                                    rep_tex = find_lowest_udim_texture(file_nodes)
+                                    if rep_tex:
+                                        if slot == 'color':
+                                            mat_data['Diffuse'] = rep_tex
+                                        elif slot == 'transparency':
+                                            mat_data['Alpha'] = rep_tex
+                                        elif slot == 'normalCamera':
+                                            mat_data['Normal'] = rep_tex
+
+                                        mat_data['textures']['allTextures'].extend(
+                                            [cmds.getAttr(f'{f}.fileTextureName') for f in file_nodes]
+                                        )
+
+                                        if not mat_data['textures']['uv']:
+                                            mat_data['textures']['uv'] = get_uv_data_from_file_node(file_nodes[0])
+                                else:
+                                    try:
+                                        rgb = cmds.getAttr(f'{mat}.{slot}')[0]
+                                        color_val = [round(c, 4) for c in rgb]
+                                        if slot == 'color':
+                                            mat_data['Diffuse'] = color_val
+                                        elif slot == 'transparency':
+                                            mat_data['Alpha'] = color_val
+                                    except Exception:
+                                        pass
+
+                        mesh_info['materials'].append(mat_data)
+
+                    else:
+                        input_attrs = cmds.listAttr(mat, multi=True) or []
+                        layer_indices = {}
+
+                        for attr in input_attrs:
+                            match = re.search(r'inputs\[(\d+)\]\.(\w+)', attr)
+                            if match:
+                                layer_indices.setdefault(int(match.group(1)), []).append(match.group(2))
+
+                        mat_data = {'name': mat, 'type': 'layered_udim', 'layers': []}
+
+                        for i, slots in layer_indices.items():
+                            layer_data = {'layer': i, 'textures': {'allTextures': [], 'uv': {}}}
+
+                            for slot in slots:
+                                all_file_nodes = find_all_file_textures(f'{mat}.inputs[{i}].{slot}')
+                                if all_file_nodes:
+                                    representative_tex = find_lowest_udim_texture(all_file_nodes)
+                                    udim_path = make_udim_pattern_path(representative_tex)
+
+                                    if slot == 'color':
+                                        layer_data['Diffuse'] = udim_path
+                                    elif slot == 'transparency':
+                                        layer_data['Alpha'] = udim_path
+                                    else:
+                                        layer_data[slot] = udim_path
+
+                                    layer_data['textures']['allTextures'].extend(
+                                        [cmds.getAttr(f'{f}.fileTextureName') for f in all_file_nodes]
                                     )
 
-                                    if not mat_data["textures"]["uv"]:
-                                        mat_data["textures"]["uv"] = get_uv_data_from_file_node(file_nodes[0])
-                            else:
-                                try:
-                                    rgb = cmds.getAttr(f"{mat}.{slot}")[0]
-                                    color_val = [round(c, 4) for c in rgb]
-                                    if slot == "color":
-                                        mat_data["Diffuse"] = color_val
-                                    elif slot == "transparency":
-                                        mat_data["Alpha"] = color_val
-                                except:
-                                    pass
+                                    if not layer_data['textures']['uv']:
+                                        layer_data['textures']['uv'] = get_uv_data_from_file_node(all_file_nodes[0])
 
-                    mesh_info["materials"].append(mat_data)
+                            if 'Diffuse' in layer_data or 'Alpha' in layer_data:
+                                mat_data['layers'].append(layer_data)
 
-                else:
-                    input_attrs = cmds.listAttr(mat, multi=True) or []
-                    layer_indices = {}
+                        mesh_info['materials'].append(mat_data)
 
-                    for attr in input_attrs:
-                        match = re.search(r"inputs\[(\d+)\]\.(\w+)", attr)
-                        if match:
-                            layer_indices.setdefault(int(match.group(1)), []).append(match.group(2))
+            result_data['meshes'].append(mesh_info)
+            cmds.progressWindow(edit=True, progress=idx + 1)
 
-                    mat_data = {"name": mat, "type": "layered_udim", "layers": []}
+        cmds.progressWindow(endProgress=True)
 
-                    for i, slots in layer_indices.items():
-                        layer_data = {"layer": i, "textures": {"allTextures": [], "uv": {}}}
+        with open(final_json, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, indent=2)
 
-                        for slot in slots:
-                            all_file_nodes = find_all_file_textures(f"{mat}.inputs[{i}].{slot}")
-                            if all_file_nodes:
-                                representative_tex = find_lowest_udim_texture(all_file_nodes)
-                                udim_path = make_udim_pattern_path(representative_tex)
+        print(f'[INFO] JSON saved to: {final_json}')
 
-                                if slot == "color":
-                                    layer_data["Diffuse"] = udim_path
-                                elif slot == "transparency":
-                                    layer_data["Alpha"] = udim_path
-                                else:
-                                    layer_data[slot] = udim_path
-
-                                layer_data["textures"]["allTextures"].extend(
-                                    [cmds.getAttr(f"{f}.fileTextureName") for f in all_file_nodes]
-                                )
-
-                                if not layer_data["textures"]["uv"]:
-                                    layer_data["textures"]["uv"] = get_uv_data_from_file_node(all_file_nodes[0])
-
-                        if "Diffuse" in layer_data or "Alpha" in layer_data:
-                            mat_data["layers"].append(layer_data)
-
-                    mesh_info["materials"].append(mat_data)
-
-        result_data["meshes"].append(mesh_info)
-        cmds.progressWindow(edit=True, progress=idx + 1)
-
-    cmds.progressWindow(endProgress=True)
-
-    with open(final_json, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, indent=2)
-
-    print(f"🧾 JSON saved to: {final_json}")
-
-    # final copy
-    try:
-        shutil.copy(temp_usd_anim, final_usd)
-        print(f"✅ USD copied to: {final_usd}")
-    except PermissionError:
-        cmds.warning("블랜더가 열려있어서 USD를 덮어쓸 수 없습니다.")
-    except Exception as e:
-        cmds.warning(f"[⚠️] USD 파일 복사 실패: {e}")
-
-    # 최소 원복
-    if cmds.objExists(duplicated_geo):
         try:
-            cmds.delete(duplicated_geo)
-        except:
-            pass
+            shutil.copy(temp_usd_anim, final_usd)
+            print(f'[INFO] USD copied to: {final_usd}')
+        except PermissionError:
+            cmds.warning('[LookDev] USD copy permission denied.')
+        except Exception as e:
+            cmds.warning(f'[LookDev] USD copy failed: {e}')
 
-    if cmds.objExists(temp_original_name):
-        try:
-            if cmds.objExists(base_geo_name):
-                try:
-                    cmds.delete(base_geo_name)
-                except:
-                    pass
-            cmds.rename(temp_original_name, base_geo_name)
-        except:
-            pass
+        if cmds.objExists(duplicated_geo):
+            try:
+                cmds.delete(duplicated_geo)
+            except Exception:
+                pass
 
-    cmds.select(clear=True)
+        cmds.select(clear=True)
 
-    print(f"✅ LookDev USD exported to: {final_usd}")
-    print("=" * 80)
-    print("[USD EXPORT] END")
-    print("=" * 80 + "\n")
-    return True
+        print(f'[INFO] LookDev USD exported to: {final_usd}')
+        print('=' * 80)
+        print('[USD EXPORT] END')
+        print('=' * 80 + '\n')
+        return True
+
 
 def export_usd_to_custom_folder():
     import json, os, shutil, re
