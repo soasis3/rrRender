@@ -172,6 +172,15 @@ def get_scene_export_info(current_file_path):
             final_dir = os.path.normpath(os.path.join(get_project_path(COC_PROJECT), asset_name, "mod", "usd"))
             return COC_PROJECT, COC_CATEGORY, asset_name, final_dir
 
+    file_name = os.path.splitext(os.path.basename(normalized_path))[0]
+    local_match = re.match(r"^(?P<asset>.+?)_(?P<process>rig|mod|lookdev|fin)(?:_[^/\\\\]+)?$", file_name, re.IGNORECASE)
+    if local_match:
+        asset_name = local_match.group("asset")
+        coc_asset_dir = os.path.normpath(os.path.join(get_project_path(COC_PROJECT), asset_name))
+        if os.path.isdir(coc_asset_dir):
+            final_dir = os.path.normpath(os.path.join(coc_asset_dir, "mod", "usd"))
+            return COC_PROJECT, COC_CATEGORY, asset_name, final_dir
+
     if len(path_parts) < 4:
         return None, None, None, None
 
@@ -399,15 +408,21 @@ def export_usd():
                 short_name = node.split('|')[-1].lower()
                 score = 0
                 if short_name == asset_name.lower():
-                    score += 80
+                    score += 200
                 if asset_name.lower() in short_name:
                     score += 30
                 if 'geometry' in node.lower() or '|geo|' in node.lower():
                     score += 40
                 if short_name.endswith('_geo'):
-                    score += 20
+                    score -= 40
                 if short_name.endswith('_model'):
                     score += 10
+                if any(token in short_name for token in ['body_grp', 'head_grp', 'arm', 'leg', 'tail', 'hair', 'beard']):
+                    score -= 80
+                if node.lower().startswith(f'|{asset_name.lower()}|geometry|{asset_name.lower()}'):
+                    score += 120
+                if node.count('|') <= 3:
+                    score += 20
                 score -= node.count('|')
                 scored.append((score, node))
 
