@@ -2899,6 +2899,7 @@ class OpenFileOperator(bpy.types.Operator):
         return context.scene.my_tool.blend_file != ''
 
     def execute(self, context):
+        global _pending_browser_focus_filepath
         scene_number = context.scene.my_tool.scene_number
         cut_number = context.scene.my_tool.cut_number
         blend_file = context.scene.my_tool.blend_file
